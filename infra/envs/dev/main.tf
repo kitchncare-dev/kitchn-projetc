@@ -5,19 +5,19 @@ terraform {
     random = { source = "hashicorp/random", version = "~> 3.6" }
   }
   backend "gcs" {
-    bucket = "monapp-dev-tfstate"
+    bucket = "kitchn-dev-tfstate"
     prefix = "terraform/state"
   }
 }
 
 provider "google" {
-  project = "ID_PROJET_DEV"
+  project = "kitchn-dev-515310"
   region  = "europe-west9"
 }
 
 module "app" {
   source        = "../../modules/app"
-  project_id    = "ID_PROJET_DEV"
+  project_id    = "kitchn-dev-515310"
   region        = "europe-west9"
   env_name      = "dev"
   db_tier       = "db-f1-micro"
