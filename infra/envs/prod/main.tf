@@ -19,7 +19,7 @@ module "app" {
   source        = "../../modules/app"
   project_id    = "kitchn-prod-515310"
   region        = "europe-west9"
-  env_name      = "dev"
+  env_name      = "prod"
   db_tier       = "db-f1-micro"
   min_instances = 1
   max_instances = 3
