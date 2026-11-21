@@ -5,7 +5,7 @@ terraform {
     random = { source = "hashicorp/random", version = "~> 3.6" }
   }
   backend "gcs" {
-    bucket = "monapp-prod-tfstate"
+    bucket = "kitchn-prod-tfstate"
     prefix = "terraform/state"
   }
 }
