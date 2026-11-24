@@ -1,11 +1,17 @@
+
 name: test-gcp-auth
+
 on:
   workflow_dispatch:
     inputs:
       environment:
+        description: "Environment cible"
         type: choice
-        options: [dev, prod]
+        options:
+          - dev
+          - prod
         default: dev
+        required: true
 
 permissions:
   contents: read
@@ -15,12 +21,34 @@ jobs:
   whoami:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+
     steps:
-      - uses: google-github-actions/auth@v2
+      - name: Afficher l'identité OIDC (debug)
+        run: |
+          TOKEN=$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=debug" | jq -r .value)
+
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+
+          while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do
+            PAYLOAD="${PAYLOAD}="
+          done
+
+          echo "$PAYLOAD" | base64 -d | jq '{sub, repository, environment, ref}'
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - run: |
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify GCP authentication
+        run: |
           gcloud auth list
-          gcloud run services list --project ${{ vars.GCP_PROJECT_ID }} --region ${{ vars.GCP_REGION }}
+          gcloud run services list \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --region "${{ vars.GCP_REGION }}"
