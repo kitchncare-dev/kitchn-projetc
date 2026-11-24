@@ -24,3 +24,21 @@ module "app" {
   min_instances = 0
   max_instances = 3
 }
+
+module "github_deploy" {
+  source           = "../../modules/github-deploy"
+  project_id       = "kitchn-dev-515310"
+  region           = "europe-west9"
+  env_name         = "dev"
+  github_repo      = "kitchncare-dev/kitchn-projetc"
+  github_subject_repo = "kitchncare-dev@359126054/kitchn-projetc@1465363100"
+  runtime_sa_email = module.app.runtime_sa_email
+  artifact_repo_id = module.app.artifact_repo_id
+}
+
+output "wif_provider" {
+  value = module.github_deploy.workload_identity_provider
+}
+output "deploy_sa" {
+  value = module.github_deploy.deploy_service_account
+}
