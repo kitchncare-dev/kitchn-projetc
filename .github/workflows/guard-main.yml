@@ -1,0 +1,17 @@
+name: guard-main
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  only-from-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vérifier la branche source
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD_BRANCH" != "dev" ]; then
+            echo "Seules les PR depuis dev sont autorisées vers main."
+            exit 1
+          fi
