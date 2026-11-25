@@ -227,4 +227,3 @@ jobs:
 
           curl -fsS --retry 10 --retry-delay 3 \
             --retry-all-errors "$URL/health"
-
