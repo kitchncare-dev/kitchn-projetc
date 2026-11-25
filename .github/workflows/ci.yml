@@ -28,7 +28,7 @@ jobs:
           cache: npm
           cache-dependency-path: apps/api/package-lock.json
       - run: npm ci
-      - run: npx eslint "{src,test}/**/*.ts"
+      - run: npm run lint
       - run: npm run build
       - run: npm test
       - run: npm run test:e2e
@@ -73,5 +73,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Recherche de secrets dans le code (gitleaks)
-        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest dir --redact --no-banner /repo
+        - name: Recherche de secrets dans le code (gitleaks)
+          run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest dir --redact --verbose --no-banner /repo
