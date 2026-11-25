@@ -19,7 +19,7 @@ resource "google_project_iam_member" "runtime_sql" {
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }
 
-# Base de données PostgreSQL
+
 resource "google_sql_database_instance" "db" {
   project             = var.project_id
   name                = "monapp-${var.env_name}-db"
@@ -28,7 +28,8 @@ resource "google_sql_database_instance" "db" {
   deletion_protection = var.env_name == "prod"
 
   settings {
-    tier = var.db_tier
+    edition = "ENTERPRISE"      # ← ajoute cette ligne
+    tier    = var.db_tier
     backup_configuration { enabled = true }
   }
 }
