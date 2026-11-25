@@ -1,5 +1,4 @@
 
-
 name: ci
 
 on:
@@ -17,16 +16,19 @@ jobs:
   api:
     name: ci-api
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/api
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/api/package-lock.json
+
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -36,16 +38,19 @@ jobs:
   web:
     name: ci-web
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/web
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
+
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -53,25 +58,43 @@ jobs:
   docker:
     name: ci-docker
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Construire et démarrer l'image API
+
+      - name: Construire et tester l'image API
         run: |
           docker build -t api-demo apps/api
           docker run -d --name api -p 8080:8080 api-demo
-          curl -fsS --retry 20 --retry-delay 2 --retry-all-errors http://localhost:8080/health
-          docker rm -f api
-      - name: Construire et démarrer l'image front
+
+          curl -fsS --retry 20 --retry-delay 2 --retry-all-errors \
+            http://localhost:8080/health
+
+      - name: Construire et tester l'image front
         run: |
           docker build -t web-demo apps/web
           docker run -d --name web -p 3000:8080 web-demo
-          curl -fsS --retry 20 --retry-delay 2 --retry-all-errors http://localhost:3000/api/health
-          docker rm -f web
+
+          curl -fsS --retry 20 --retry-delay 2 --retry-all-errors \
+            http://localhost:3000/api/health
+
+      - name: Nettoyage des conteneurs
+        if: always()
+        run: |
+          docker rm -f api web 2>/dev/null || true
 
   security:
     name: ci-security
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-        - name: Recherche de secrets dans le code (gitleaks)
-          run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest dir --redact --verbose --no-banner /repo
+
+      - name: Recherche de secrets dans le code (Gitleaks)
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            dir --redact --verbose --no-banner /repo
