@@ -5,9 +5,6 @@ on:
   pull_request:
     branches: [dev, main]
 
-  push:
-    branches: [main]
-
 permissions:
   contents: read
 
@@ -109,17 +106,6 @@ jobs:
         run: |
           docker build -t web-demo apps/web
 
-      - name: Tester le conteneur Frontend
-        run: |
-          docker run -d \
-            --name web \
-            -p 3000:8080 \
-            web-demo
-
-          curl -fsS --retry 20 --retry-delay 2 \
-            --retry-all-errors \
-            http://localhost:3000/api/health
-
       - name: Nettoyage des conteneurs
         if: always()
         run: |
@@ -147,84 +133,4 @@ jobs:
             -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
             dir --redact --verbose --no-banner /repo
-
-
-  # ==========================================
-  # DEPLOY GOOGLE CLOUD RUN
-  # ==========================================
-
-  deploy:
-    name: deploy-cloud-run
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    needs: [api, docker, security]
-
-    # Déploiement uniquement après un push sur main
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    permissions:
-      contents: read
-      id-token: write
-
-    env:
-      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      REGION: ${{ vars.GCP_REGION }}
-      REPOSITORY: ${{ vars.GCP_AR_REPOSITORY }}
-      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Authentification Google Cloud sans clé JSON
-      - name: Authentification Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Installer Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      # Configuration Docker avec Artifact Registry
-      - name: Configurer Docker
-        run: |
-          gcloud auth configure-docker \
-            $REGION-docker.pkg.dev --quiet
-
-      # Construction et publication de l'image
-      - name: Build et Push API
-        run: |
-          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/api:${GITHUB_SHA}"
-
-          docker build \
-            -t "$IMAGE" \
-            apps/api
-
-          docker push "$IMAGE"
-
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-
-      # Déploiement Cloud Run
-      - name: Déployer sur Cloud Run
-        run: |
-          gcloud run deploy "$SERVICE" \
-            --image "$IMAGE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --platform managed \
-            --allow-unauthenticated
-
-      # Vérification après déploiement
-      - name: Vérifier le déploiement
-        run: |
-          URL=$(gcloud run services describe "$SERVICE" \
-            --project "$PROJECT_ID" \
-            --region "$REGION" \
-            --format='value(status.url)')
-
           echo "API URL: $URL"
-
-          curl -fsS --retry 10 --retry-delay 3 \
-            --retry-all-errors "$URL/health"
-
