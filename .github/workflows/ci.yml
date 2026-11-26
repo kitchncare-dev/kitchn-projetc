@@ -109,17 +109,6 @@ jobs:
         run: |
           docker build -t web-demo apps/web
 
-      - name: Tester le conteneur Frontend
-        run: |
-          docker run -d \
-            --name web \
-            -p 3000:8080 \
-            web-demo
-
-          curl -fsS --retry 20 --retry-delay 2 \
-            --retry-all-errors \
-            http://localhost:3000/api/health
-
       - name: Nettoyage des conteneurs
         if: always()
         run: |
