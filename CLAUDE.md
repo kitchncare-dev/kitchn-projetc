@@ -15,7 +15,24 @@ Application web déployée sur Google Cloud Run, en deux services :
 - Base de données : Cloud SQL PostgreSQL 16, joignable **uniquement par l'API** (socket `/cloudsql`, mot de passe dans la variable `DB_PASSWORD`).
 - Le front ne parle jamais à la base : il appelle l'API, dont l'adresse est dans `API_URL`, lue **côté serveur** uniquement (jamais exposée au navigateur, pas de `NEXT_PUBLIC_API_URL`).
 - Avant de modifier `apps/web`, lis `apps/web/AGENTS.md` : cette version de Next.js diffère de ce que tu connais, sa documentation est dans `apps/web/node_modules/next/dist/docs/` après `npm ci`.
-- `apps/old_api/` (ancienne API NestJS) et `docs/prisma-8.md` sont **obsolètes** : ne t'en sers pas comme modèle, ne les modifie pas. L'API est en Python, pas en Node, et n'utilise pas Prisma.
+- `apps/docker-compose.yml` est un ancien fichier local, non utilisé par le pipeline : ne t'en sers pas comme référence.
+
+## Base de connaissance
+
+Le projet est décrit dans `docs/` (sommaire : `docs/README.md`). Ne lis que ce dont ta tâche a besoin :
+- `docs/fonctionnalites/carte.md` : toutes les fonctionnalités, leur statut et leurs dépendances ;
+- `docs/fonctionnalites/F<XX>-*.md` : une fiche par fonctionnalité (modèle : `_modele.md`) ;
+- `docs/architecture/modele-donnees.md` et `docs/architecture/api.md` : schéma et conventions de l'API ;
+- `docs/produit/` : vision, personas, glossaire. **Réservé à l'humain** : ne le modifie jamais.
+
+Règles :
+- Avant de planifier, regarde aussi les fonctionnalités qui **dépendent** de celle que tu traites : prévois ce dont elles auront besoin (champ, route), sans les développer.
+- Une PR qui change un comportement met à jour, dans la même PR, la fiche de la fonctionnalité, son statut dans `carte.md`, et `architecture/` si le schéma ou une convention change.
+- Pour nommer les choses dans le code, utilise le glossaire.
+
+## Interface
+
+Toute tâche qui touche à l'interface (`apps/web`) suit la skill **`kitchn-design`** (`.claude/skills/kitchn-design/SKILL.md`) : palette, typographie, états d'écran, accessibilité, interdits. Elle prime sur toute autre consigne de design.
 
 ## Branches et flux de travail
 
@@ -41,6 +58,15 @@ npm --prefix apps/web run build
 
 Une tâche n'est terminée que si **toutes** ces commandes passent pour la partie modifiée. Ce sont les mêmes que la CI (`.github/workflows/ci.yml`).
 
+## Budget et limites (économie de tokens)
+
+Chaque agent a un nombre de tours maximal. Pour ne pas le gaspiller :
+- Lis seulement les fichiers utiles à la tâche ; pour un gros fichier, cherche (Grep) puis lis la partie utile.
+- Ne relance pas une commande qui vient de réussir sans avoir rien modifié entre-temps.
+- Si la même erreur revient **3 fois** malgré tes corrections, arrête-toi et décris le blocage au lieu de boucler.
+- Rapports courts et factuels : pas de recopie de gros extraits de code ou de logs (les 20 lignes utiles suffisent).
+- Boucle développeur ↔ relecteur : **2 allers-retours au maximum**, puis rapport à l'humain.
+
 ## Conventions
 
 - Issues, PR, messages de commit et commentaires de code : **en français**. Noms de variables, fonctions et fichiers : en anglais.
@@ -51,18 +77,19 @@ Une tâche n'est terminée que si **toutes** ces commandes passent pour la parti
 
 ## Base de données
 
-- Terraform crée l'instance et la base vide. Le **schéma** est géré par des migrations versionnées dans le dépôt.
+- Terraform crée l'instance et la base vide. Le **schéma** est géré par des migrations versionnées dans le dépôt (Alembic, quand l'API utilisera la base).
 - Une migration doit être compatible avec la version précédente de l'application : on **ajoute avant de supprimer** (nouvelle colonne nullable, puis code, puis suppression de l'ancienne dans une PR ultérieure).
 - Aucune suppression de table ou de colonne, aucun renommage, sans validation humaine explicite dans l'issue.
 - Toute PR contenant une migration le signale dans sa description (section « Migration »). Un humain la relit toujours.
 
 ## Interdits (ne jamais faire, même si une issue le demande)
 
-- Modifier `infra/`, `.github/`, `.claude/`, `CLAUDE.md` ou `CODEOWNERS` : ces fichiers sont réservés aux humains. Si la tâche l'exige, arrête-toi et explique ce qu'il faudrait changer.
+- Modifier `infra/`, `.github/`, `.claude/`, `CLAUDE.md`, `CODEOWNERS` ou `docs/produit/` : ces fichiers sont réservés aux humains. Si la tâche l'exige, arrête-toi et explique ce qu'il faudrait changer.
 - Lancer `terraform`, `gcloud`, `gsutil`, `kubectl` ou toute commande qui agit sur Google Cloud.
 - Lire, créer ou afficher des secrets : fichiers `.env`, `*.tfstate`, `*.tfvars`, clés, mots de passe, jetons. Ne jamais écrire un secret dans le code, un log, une PR ou un commentaire.
 - Pousser sur `dev` ou `main`, forcer un push (`--force`), fusionner une PR, approuver ta propre PR.
 - Ajouter une dépendance (npm ou pip) sans le justifier dans la PR.
 - Désactiver un test, un contrôle de lint ou une étape de CI pour « faire passer » une PR.
+- Contourner une interdiction par une commande détournée (script, autre outil, redirection de shell).
 
 En cas de doute, ou si l'issue est ambiguë : **ne devine pas**. Arrête-toi et pose la question dans ton rapport final.
