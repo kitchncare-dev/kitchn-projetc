@@ -14,13 +14,55 @@ concurrency:
 jobs:
 
   # ==========================================
-  # API PYTHON
+  # QUELLES PARTIES ONT CHANGÉ ?
+  # ==========================================
+  # Compare la PR à sa branche cible et dit si l'API et/ou le front sont touchés.
+  # Une modification de ce fichier (ci.yml) relance tout, pour tester la CI elle-même.
+
+  changes:
+    name: ci-changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+
+    steps:
+      # Sur une PR, GitHub prépare un commit de fusion "PR + branche cible".
+      # Son premier parent (HEAD^1) est la branche cible : HEAD^1..HEAD = ce que la PR change.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Détecter les parties modifiées
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only HEAD^1 HEAD)
+          echo "Fichiers modifiés :"
+          echo "$CHANGED"
+
+          api=false
+          web=false
+          if echo "$CHANGED" | grep -q '^apps/api/'; then api=true; fi
+          if echo "$CHANGED" | grep -q '^apps/web/'; then web=true; fi
+          if echo "$CHANGED" | grep -q '^\.github/workflows/ci\.yml$'; then api=true; web=true; fi
+
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "### Parties testées : API = $api, Web = $web" >> "$GITHUB_STEP_SUMMARY"
+
+
+  # ==========================================
+  # API PYTHON (tests + image Docker)
   # ==========================================
 
   api:
     name: ci-api
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     defaults:
       run:
@@ -42,15 +84,40 @@ jobs:
       - name: Tester l'API
         run: pytest -v
 
+      - name: Construire et tester l'image API
+        run: |
+          docker build -t api-demo .
+
+          docker run -d \
+            --name api \
+            -p 8080:8080 \
+            api-demo
+
+          curl -fsS --retry 20 --retry-delay 2 \
+            --retry-all-errors \
+            http://localhost:8080/health
+
+          curl -fsS http://localhost:8080/ | grep -q '"status":"OK"'
+
+      - name: Logs du conteneur en cas d'échec
+        if: failure()
+        run: docker logs api 2>&1 || true
+
+      - name: Nettoyage du conteneur
+        if: always()
+        run: docker rm -f api 2>/dev/null || true
+
 
   # ==========================================
-  # FRONTEND
+  # FRONTEND (lint + build + image Docker)
   # ==========================================
 
   web:
     name: ci-web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     defaults:
       run:
@@ -69,41 +136,9 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
-
-  # ==========================================
-  # DOCKER BUILD & TEST
-  # ==========================================
-
-  docker:
-    name: ci-docker
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    needs: [api, web]
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Construire l'image API
-        run: |
-          docker build -t api-demo apps/api
-
-      - name: Tester le conteneur API
-        run: |
-          docker run -d \
-            --name api \
-            -p 8080:8080 \
-            api-demo
-
-          curl -fsS --retry 20 --retry-delay 2 \
-            --retry-all-errors \
-            http://localhost:8080/health
-
-          curl -fsS http://localhost:8080/ | grep -q '"status":"OK"'
-
       - name: Construire et tester l'image Frontend
         run: |
-          docker build -t web-demo apps/web
+          docker build -t web-demo .
 
           docker run -d \
             --name web \
@@ -114,29 +149,23 @@ jobs:
             --retry-all-errors \
             http://localhost:3000/api/health
 
-      - name: Logs des conteneurs en cas d'échec
+      - name: Logs du conteneur en cas d'échec
         if: failure()
-        run: |
-          docker logs api 2>&1 || true
-          docker logs web 2>&1 || true
+        run: docker logs web 2>&1 || true
 
-      - name: Nettoyage des conteneurs
+      - name: Nettoyage du conteneur
         if: always()
-        run: |
-          docker rm -f api web 2>/dev/null || true
+        run: docker rm -f web 2>/dev/null || true
 
 
   # ==========================================
-  # SECURITY
+  # SECURITY (toujours lancé)
   # ==========================================
 
   security:
     name: ci-security
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
-    permissions:
-      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -147,3 +176,31 @@ jobs:
             -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
             dir --redact --verbose --no-banner /repo
+
+
+  # ==========================================
+  # RÉSULTAT GLOBAL : le seul check à rendre obligatoire
+  # ==========================================
+  # Un job sauté (partie non modifiée) compte comme OK.
+  # Un job échoué ou annulé fait échouer ci-ok, donc bloque la fusion.
+
+  ci-ok:
+    name: ci-ok
+    needs: [changes, api, web, security]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Vérifier le résultat des jobs
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key) : \(.value.result)"'
+
+          if echo "$RESULTS" | jq -e 'to_entries | any(.value.result != "success" and .value.result != "skipped")' > /dev/null; then
+            echo "Au moins un job a échoué ou a été annulé."
+            exit 1
+          fi
+
+          echo "Tous les jobs nécessaires sont passés."
