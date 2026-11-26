@@ -48,3 +48,6 @@ dist/
 .env
 playwright-report/
 test-results/
+
+# Réglages Claude Code personnels (non partagés)
+.claude/settings.local.json
