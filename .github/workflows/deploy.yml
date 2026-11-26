@@ -15,7 +15,7 @@ jobs:
   deploy:
     name: deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     # dev -> environnement GitHub "dev" ; main -> environnement "prod" (avec ton approbation)
     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
@@ -27,8 +27,9 @@ jobs:
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
-      REPOSITORY: app      # dépôt Artifact Registry créé par Terraform
-      SERVICE: monapp      # service Cloud Run créé par Terraform
+      REPOSITORY: app             # dépôt Artifact Registry créé par Terraform
+      API_SERVICE: my-api         # services Cloud Run créés par Terraform
+      WEB_SERVICE: my-web-app
 
     steps:
       - uses: actions/checkout@v4
@@ -44,42 +45,89 @@ jobs:
       - name: Configurer Docker pour Artifact Registry
         run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
-      - name: Construire et publier l'image API
+      - name: Construire et publier les images (api et web)
         run: |
-          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/api:$GITHUB_SHA"
-          docker build -t "$IMAGE" apps/api
-          docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY"
+          API_IMAGE="$BASE/api:$GITHUB_SHA"
+          WEB_IMAGE="$BASE/web:$GITHUB_SHA"
 
-      - name: Noter la révision actuelle (pour un retour arrière)
+          docker build -t "$API_IMAGE" apps/api
+          docker push "$API_IMAGE"
+
+          docker build -t "$WEB_IMAGE" apps/web
+          docker push "$WEB_IMAGE"
+
+          echo "API_IMAGE=$API_IMAGE" >> "$GITHUB_ENV"
+          echo "WEB_IMAGE=$WEB_IMAGE" >> "$GITHUB_ENV"
+
+      - name: Noter les révisions actuelles (pour un retour arrière)
         run: |
-          PREVIOUS=$(gcloud run services describe "$SERVICE" \
+          API_PREVIOUS=$(gcloud run services describe "$API_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
             --format='value(status.latestReadyRevisionName)')
-          echo "PREVIOUS=$PREVIOUS" >> "$GITHUB_ENV"
+          WEB_PREVIOUS=$(gcloud run services describe "$WEB_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='value(status.latestReadyRevisionName)')
+          echo "API_PREVIOUS=$API_PREVIOUS" >> "$GITHUB_ENV"
+          echo "WEB_PREVIOUS=$WEB_PREVIOUS" >> "$GITHUB_ENV"
 
-      - name: Déployer la nouvelle révision
+      # --- API d'abord, puis le front ---
+
+      - name: Déployer l'API
         run: |
-          gcloud run services update "$SERVICE" \
-            --image "$IMAGE" \
+          gcloud run services update "$API_SERVICE" \
+            --image "$API_IMAGE" \
             --project "$PROJECT_ID" --region "$REGION"
-          gcloud run services update-traffic "$SERVICE" --to-latest \
+          gcloud run services update-traffic "$API_SERVICE" --to-latest \
             --project "$PROJECT_ID" --region "$REGION"
 
-      - name: Vérifier le déploiement
+      - name: Vérifier l'API
         run: |
-          URL=$(gcloud run services describe "$SERVICE" \
+          URL=$(gcloud run services describe "$API_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
             --format='value(status.url)')
-          echo "URL : $URL"
+          echo "API : $URL"
           curl -fsS --retry 10 --retry-delay 3 --retry-all-errors "$URL/health"
 
+      - name: Déployer le front web
+        run: |
+          gcloud run services update "$WEB_SERVICE" \
+            --image "$WEB_IMAGE" \
+            --project "$PROJECT_ID" --region "$REGION"
+          gcloud run services update-traffic "$WEB_SERVICE" --to-latest \
+            --project "$PROJECT_ID" --region "$REGION"
+
+      - name: Vérifier le front web
+        run: |
+          URL=$(gcloud run services describe "$WEB_SERVICE" \
+            --project "$PROJECT_ID" --region "$REGION" \
+            --format='value(status.url)')
+          echo "Web : $URL"
+          curl -fsS --retry 10 --retry-delay 3 --retry-all-errors "$URL/api/health"
+
+      - name: Résumé du déploiement
+        run: |
+          {
+            echo "### Déploiement ${{ github.ref_name }} réussi"
+            echo ""
+            echo "- Commit : \`$GITHUB_SHA\`"
+            echo "- API : $(gcloud run services describe "$API_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+            echo "- Web : $(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Si une étape échoue, on remet les DEUX services sur leur révision précédente,
+      # pour retrouver le dernier couple api + web qui fonctionnait.
       - name: Retour arrière automatique si échec
         if: failure()
         run: |
-          if [ -n "$PREVIOUS" ]; then
-            echo "Retour à la révision $PREVIOUS"
-            gcloud run services update-traffic "$SERVICE" \
-              --to-revisions "$PREVIOUS=100" \
-              --project "$PROJECT_ID" --region "$REGION"
-          fi
+          for pair in "$API_SERVICE:$API_PREVIOUS" "$WEB_SERVICE:$WEB_PREVIOUS"; do
+            service="${pair%%:*}"
+            previous="${pair#*:}"
+            if [ -n "$previous" ]; then
+              echo "Retour de $service à la révision $previous"
+              gcloud run services update-traffic "$service" \
+                --to-revisions "$previous=100" \
+                --project "$PROJECT_ID" --region "$REGION" \
+                || echo "::error::Retour arrière impossible pour $service"
+            fi
+          done

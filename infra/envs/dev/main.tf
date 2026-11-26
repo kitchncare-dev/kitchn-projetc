@@ -33,6 +33,7 @@ module "github_deploy" {
   github_repo      = "kitchncare-dev/kitchn-projetc"
   github_subject_repo = "kitchncare-dev@359126054/kitchn-projetc@1465363100"
   runtime_sa_email = module.app.runtime_sa_email
+  web_runtime_sa_email = module.app.web_runtime_sa_email
   artifact_repo_id = module.app.artifact_repo_id
 }
 
@@ -41,4 +42,10 @@ output "wif_provider" {
 }
 output "deploy_sa" {
   value = module.github_deploy.deploy_service_account
+}
+output "api_url" {
+  value = module.app.api_url
+}
+output "web_url" {
+  value = module.app.web_url
 }

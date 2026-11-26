@@ -40,7 +40,7 @@ resource "google_service_account" "deploy" {
 resource "google_service_account_iam_member" "github_impersonation" {
   service_account_id = google_service_account.deploy.name
   role               = "roles/iam.workloadIdentityUser"
-    member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/subject/repo:${var.github_subject_repo}:environment:${var.env_name}"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/subject/repo:${var.github_subject_repo}:environment:${var.env_name}"
 }
 
 # Ce que ce compte a le droit de faire : le strict minimum
@@ -52,6 +52,13 @@ resource "google_project_iam_member" "deploy_run" {
 
 resource "google_service_account_iam_member" "act_as_runtime" {
   service_account_id = "projects/${var.project_id}/serviceAccounts/${var.runtime_sa_email}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${google_service_account.deploy.email}"
+}
+
+# Même droit pour l'identité du front web (sinon impossible de déployer my-web-app)
+resource "google_service_account_iam_member" "act_as_web_runtime" {
+  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.web_runtime_sa_email}"
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${google_service_account.deploy.email}"
 }
