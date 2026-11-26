@@ -51,7 +51,6 @@
       "Edit(**/.env.*)",
 
       "Edit(infra/**)",
-      "Edit(.github/workflows/**)",
 
       "Bash(terraform *)",
       "Bash(gcloud *)",
