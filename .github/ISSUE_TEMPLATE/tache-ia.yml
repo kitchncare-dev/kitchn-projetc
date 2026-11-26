@@ -1,0 +1,73 @@
+name: Tâche pour les agents IA
+description: Décrire une tâche à confier à l'orchestrateur. Le propriétaire pose ensuite le label « ai-dev » pour la lancer.
+title: "[Tâche] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Plus la tâche est précise, meilleur est le résultat. Une issue = une petite PR.
+        **La tâche n'est lancée que lorsque le propriétaire du dépôt ajoute le label `ai-dev`.**
+
+  - type: dropdown
+    id: partie
+    attributes:
+      label: Partie concernée
+      options:
+        - API (apps/api)
+        - Front (apps/web)
+        - API et front
+        - Documentation uniquement
+    validations:
+      required: true
+
+  - type: input
+    id: fonctionnalite
+    attributes:
+      label: Fonctionnalité (code de docs/fonctionnalites/carte.md)
+      placeholder: "F01"
+
+  - type: textarea
+    id: objectif
+    attributes:
+      label: Objectif
+      description: Pourquoi cette tâche ? Quel problème résout-elle pour l'utilisateur ?
+    validations:
+      required: true
+
+  - type: textarea
+    id: comportement
+    attributes:
+      label: Comportement attendu
+      description: Ce que l'utilisateur voit ou ce que l'API répond, étape par étape.
+    validations:
+      required: true
+
+  - type: textarea
+    id: criteres
+    attributes:
+      label: Critères d'acceptation
+      description: Une liste vérifiable. Chaque critère doit pouvoir être testé.
+      value: |
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: liees
+    attributes:
+      label: Fonctionnalités liées
+      description: Ce qui viendra après et dont il faut tenir compte (sans le développer maintenant).
+
+  - type: textarea
+    id: hors-perimetre
+    attributes:
+      label: Hors périmètre
+      description: Ce qu'il ne faut PAS faire dans cette tâche.
+
+  - type: checkboxes
+    id: base
+    attributes:
+      label: Base de données
+      options:
+        - label: Cette tâche nécessite une migration
+        - label: J'autorise explicitement une suppression ou un renommage de table ou de colonne (à détailler ci-dessus)
