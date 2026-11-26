@@ -4,6 +4,19 @@ on:
   push:
     branches: [dev, main]
 
+  # Lancement manuel (onglet Actions > deploy > Run workflow), par exemple pour
+  # redéployer un service après un échec. Choisis la branche dev ou main.
+  workflow_dispatch:
+    inputs:
+      api:
+        description: "Déployer l'API (my-api)"
+        type: boolean
+        default: true
+      web:
+        description: "Déployer le front (my-web-app)"
+        type: boolean
+        default: true
+
 concurrency:
   group: deploy-${{ github.ref_name }}
   cancel-in-progress: false   # on ne coupe jamais un déploiement en cours
@@ -12,8 +25,66 @@ permissions:
   contents: read
 
 jobs:
+
+  # ------------------------------------------------------------------
+  # Quelles parties ont changé depuis le dernier push sur cette branche ?
+  # Ce job n'a aucun accès à Google Cloud.
+  # ------------------------------------------------------------------
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Détecter les parties modifiées
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_API: ${{ inputs.api }}
+          INPUT_WEB: ${{ inputs.web }}
+        run: |
+          api=false
+          web=false
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "Lancement manuel : on suit les cases cochées."
+            api="$INPUT_API"
+            web="$INPUT_WEB"
+          elif ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # Premier push de la branche, ou historique réécrit : on ne sait pas comparer
+            echo "Commit précédent introuvable : on déploie tout par sécurité."
+            api=true
+            web=true
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+            echo "Fichiers modifiés :"
+            echo "$CHANGED"
+            if echo "$CHANGED" | grep -q '^apps/api/'; then api=true; fi
+            if echo "$CHANGED" | grep -q '^apps/web/'; then web=true; fi
+            # Une modification de ce workflow redéploie tout, pour le tester en entier
+            if echo "$CHANGED" | grep -q '^\.github/workflows/deploy\.yml$'; then api=true; web=true; fi
+          fi
+
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "### À déployer : API = $api, Web = $web" >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # Déploiement : sauté si rien à déployer (pas de demande d'approbation en prod)
+  # ------------------------------------------------------------------
   deploy:
     name: deploy
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -30,6 +101,8 @@ jobs:
       REPOSITORY: app             # dépôt Artifact Registry créé par Terraform
       API_SERVICE: my-api         # services Cloud Run créés par Terraform
       WEB_SERVICE: my-web-app
+      DEPLOY_API: ${{ needs.changes.outputs.api }}
+      DEPLOY_WEB: ${{ needs.changes.outputs.web }}
 
     steps:
       - uses: actions/checkout@v4
@@ -45,35 +118,46 @@ jobs:
       - name: Configurer Docker pour Artifact Registry
         run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
-      - name: Construire et publier les images (api et web)
-        run: |
-          BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY"
-          API_IMAGE="$BASE/api:$GITHUB_SHA"
-          WEB_IMAGE="$BASE/web:$GITHUB_SHA"
+      # ---------------- Images ----------------
 
+      - name: Construire et publier l'image API
+        if: env.DEPLOY_API == 'true'
+        run: |
+          API_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/api:$GITHUB_SHA"
           docker build -t "$API_IMAGE" apps/api
           docker push "$API_IMAGE"
+          echo "API_IMAGE=$API_IMAGE" >> "$GITHUB_ENV"
 
+      - name: Construire et publier l'image web
+        if: env.DEPLOY_WEB == 'true'
+        run: |
+          WEB_IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/web:$GITHUB_SHA"
           docker build -t "$WEB_IMAGE" apps/web
           docker push "$WEB_IMAGE"
-
-          echo "API_IMAGE=$API_IMAGE" >> "$GITHUB_ENV"
           echo "WEB_IMAGE=$WEB_IMAGE" >> "$GITHUB_ENV"
 
-      - name: Noter les révisions actuelles (pour un retour arrière)
+      # ------- Révisions actuelles (pour un retour arrière) -------
+
+      - name: Noter la révision actuelle de l'API
+        if: env.DEPLOY_API == 'true'
         run: |
           API_PREVIOUS=$(gcloud run services describe "$API_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
             --format='value(status.latestReadyRevisionName)')
+          echo "API_PREVIOUS=$API_PREVIOUS" >> "$GITHUB_ENV"
+
+      - name: Noter la révision actuelle du front
+        if: env.DEPLOY_WEB == 'true'
+        run: |
           WEB_PREVIOUS=$(gcloud run services describe "$WEB_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
             --format='value(status.latestReadyRevisionName)')
-          echo "API_PREVIOUS=$API_PREVIOUS" >> "$GITHUB_ENV"
           echo "WEB_PREVIOUS=$WEB_PREVIOUS" >> "$GITHUB_ENV"
 
-      # --- API d'abord, puis le front ---
+      # ---------------- API d'abord ----------------
 
       - name: Déployer l'API
+        if: env.DEPLOY_API == 'true'
         run: |
           gcloud run services update "$API_SERVICE" \
             --image "$API_IMAGE" \
@@ -82,6 +166,7 @@ jobs:
             --project "$PROJECT_ID" --region "$REGION"
 
       - name: Vérifier l'API
+        if: env.DEPLOY_API == 'true'
         run: |
           URL=$(gcloud run services describe "$API_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
@@ -89,7 +174,10 @@ jobs:
           echo "API : $URL"
           curl -fsS --retry 10 --retry-delay 3 --retry-all-errors "$URL/health"
 
+      # ---------------- Puis le front ----------------
+
       - name: Déployer le front web
+        if: env.DEPLOY_WEB == 'true'
         run: |
           gcloud run services update "$WEB_SERVICE" \
             --image "$WEB_IMAGE" \
@@ -98,6 +186,7 @@ jobs:
             --project "$PROJECT_ID" --region "$REGION"
 
       - name: Vérifier le front web
+        if: env.DEPLOY_WEB == 'true'
         run: |
           URL=$(gcloud run services describe "$WEB_SERVICE" \
             --project "$PROJECT_ID" --region "$REGION" \
@@ -107,20 +196,23 @@ jobs:
 
       - name: Résumé du déploiement
         run: |
+          api_status="non modifiée, pas redéployée"
+          web_status="non modifié, pas redéployé"
+          [ "$DEPLOY_API" = "true" ] && api_status="déployée : $API_IMAGE"
+          [ "$DEPLOY_WEB" = "true" ] && web_status="déployé : $WEB_IMAGE"
           {
             echo "### Déploiement ${{ github.ref_name }} réussi"
             echo ""
-            echo "- Commit : \`$GITHUB_SHA\`"
-            echo "- API : $(gcloud run services describe "$API_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
-            echo "- Web : $(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
+            echo "- API : $api_status"
+            echo "- Web : $web_status"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Si une étape échoue, on remet les DEUX services sur leur révision précédente,
-      # pour retrouver le dernier couple api + web qui fonctionnait.
+      # Si une étape échoue, on remet sur leur révision précédente les services
+      # touchés par ce déploiement (et seulement eux).
       - name: Retour arrière automatique si échec
         if: failure()
         run: |
-          for pair in "$API_SERVICE:$API_PREVIOUS" "$WEB_SERVICE:$WEB_PREVIOUS"; do
+          for pair in "$API_SERVICE:${API_PREVIOUS:-}" "$WEB_SERVICE:${WEB_PREVIOUS:-}"; do
             service="${pair%%:*}"
             previous="${pair#*:}"
             if [ -n "$previous" ]; then
