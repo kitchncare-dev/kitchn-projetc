@@ -1,364 +1,470 @@
-diff --git a/.claude/agents/developer.md b/.claude/agents/developer.md
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 03b1a68..114f7c5 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1,4 +1,3 @@
+-
+ name: ci
+ 
+ on:
+@@ -102,10 +101,25 @@ jobs:
+ 
+           curl -fsS http://localhost:8080/ | grep -q '"status":"OK"'
+ 
+-      - name: Construire l'image Frontend
++      - name: Construire et tester l'image Frontend
+         run: |
+           docker build -t web-demo apps/web
+ 
++          docker run -d \
++            --name web \
++            -p 3000:8080 \
++            web-demo
++
++          curl -fsS --retry 20 --retry-delay 2 \
++            --retry-all-errors \
++            http://localhost:3000/api/health
++
++      - name: Logs des conteneurs en cas d'échec
++        if: failure()
++        run: |
++          docker logs api 2>&1 || true
++          docker logs web 2>&1 || true
++
+       - name: Nettoyage des conteneurs
+         if: always()
+         run: |
+@@ -133,4 +147,3 @@ jobs:
+             -v "$PWD:/repo" \
+             ghcr.io/gitleaks/gitleaks:latest \
+             dir --redact --verbose --no-banner /repo
+-          echo "API URL: $URL"
+\ No newline at end of file
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index d2be51c..d2578b3 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -15,7 +15,7 @@ jobs:
+   deploy:
+     name: deploy
+     runs-on: ubuntu-latest
+-    timeout-minutes: 20
++    timeout-minutes: 30
+ 
+     # dev -> environnement GitHub "dev" ; main -> environnement "prod" (avec ton approbation)
+     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+@@ -27,8 +27,9 @@ jobs:
+     env:
+       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+       REGION: ${{ vars.GCP_REGION }}
+-      REPOSITORY: app      # dépôt Artifact Registry créé par Terraform
+-      SERVICE: monapp      # service Cloud Run créé par Terraform
++      REPOSITORY: app             # dépôt Artifact Registry créé par Terraform
++      API_SERVICE: my-api         # services Cloud Run créés par Terraform
++      WEB_SERVICE: my-web-app
+ 
+     steps:
+       - uses: actions/checkout@v4
+@@ -44,42 +45,89 @@ jobs:
+       - name: Configurer Docker pour Artifact Registry
+         run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+ 
+-      - name: Construire et publier l'image API
++      - name: Construire et publier les images (api et web)
+         run: |
+-          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/api:$GITHUB_SHA"
+-          docker build -t "$IMAGE" apps/api
+-          docker push "$IMAGE"
+-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
++          BASE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY"
++          API_IMAGE="$BASE/api:$GITHUB_SHA"
++          WEB_IMAGE="$BASE/web:$GITHUB_SHA"
+ 
+-      - name: Noter la révision actuelle (pour un retour arrière)
++          docker build -t "$API_IMAGE" apps/api
++          docker push "$API_IMAGE"
++
++          docker build -t "$WEB_IMAGE" apps/web
++          docker push "$WEB_IMAGE"
++
++          echo "API_IMAGE=$API_IMAGE" >> "$GITHUB_ENV"
++          echo "WEB_IMAGE=$WEB_IMAGE" >> "$GITHUB_ENV"
++
++      - name: Noter les révisions actuelles (pour un retour arrière)
+         run: |
+-          PREVIOUS=$(gcloud run services describe "$SERVICE" \
++          API_PREVIOUS=$(gcloud run services describe "$API_SERVICE" \
++            --project "$PROJECT_ID" --region "$REGION" \
++            --format='value(status.latestReadyRevisionName)')
++          WEB_PREVIOUS=$(gcloud run services describe "$WEB_SERVICE" \
+             --project "$PROJECT_ID" --region "$REGION" \
+             --format='value(status.latestReadyRevisionName)')
+-          echo "PREVIOUS=$PREVIOUS" >> "$GITHUB_ENV"
++          echo "API_PREVIOUS=$API_PREVIOUS" >> "$GITHUB_ENV"
++          echo "WEB_PREVIOUS=$WEB_PREVIOUS" >> "$GITHUB_ENV"
++
++      # --- API d'abord, puis le front ---
+ 
+-      - name: Déployer la nouvelle révision
++      - name: Déployer l'API
+         run: |
+-          gcloud run services update "$SERVICE" \
+-            --image "$IMAGE" \
++          gcloud run services update "$API_SERVICE" \
++            --image "$API_IMAGE" \
+             --project "$PROJECT_ID" --region "$REGION"
+-          gcloud run services update-traffic "$SERVICE" --to-latest \
++          gcloud run services update-traffic "$API_SERVICE" --to-latest \
+             --project "$PROJECT_ID" --region "$REGION"
+ 
+-      - name: Vérifier le déploiement
++      - name: Vérifier l'API
+         run: |
+-          URL=$(gcloud run services describe "$SERVICE" \
++          URL=$(gcloud run services describe "$API_SERVICE" \
+             --project "$PROJECT_ID" --region "$REGION" \
+             --format='value(status.url)')
+-          echo "URL : $URL"
++          echo "API : $URL"
+           curl -fsS --retry 10 --retry-delay 3 --retry-all-errors "$URL/health"
+ 
++      - name: Déployer le front web
++        run: |
++          gcloud run services update "$WEB_SERVICE" \
++            --image "$WEB_IMAGE" \
++            --project "$PROJECT_ID" --region "$REGION"
++          gcloud run services update-traffic "$WEB_SERVICE" --to-latest \
++            --project "$PROJECT_ID" --region "$REGION"
++
++      - name: Vérifier le front web
++        run: |
++          URL=$(gcloud run services describe "$WEB_SERVICE" \
++            --project "$PROJECT_ID" --region "$REGION" \
++            --format='value(status.url)')
++          echo "Web : $URL"
++          curl -fsS --retry 10 --retry-delay 3 --retry-all-errors "$URL/api/health"
++
++      - name: Résumé du déploiement
++        run: |
++          {
++            echo "### Déploiement ${{ github.ref_name }} réussi"
++            echo ""
++            echo "- Commit : \`$GITHUB_SHA\`"
++            echo "- API : $(gcloud run services describe "$API_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
++            echo "- Web : $(gcloud run services describe "$WEB_SERVICE" --project "$PROJECT_ID" --region "$REGION" --format='value(status.url)')"
++          } >> "$GITHUB_STEP_SUMMARY"
++
++      # Si une étape échoue, on remet les DEUX services sur leur révision précédente,
++      # pour retrouver le dernier couple api + web qui fonctionnait.
+       - name: Retour arrière automatique si échec
+         if: failure()
+         run: |
+-          if [ -n "$PREVIOUS" ]; then
+-            echo "Retour à la révision $PREVIOUS"
+-            gcloud run services update-traffic "$SERVICE" \
+-              --to-revisions "$PREVIOUS=100" \
+-              --project "$PROJECT_ID" --region "$REGION"
+-          fi
++          for pair in "$API_SERVICE:$API_PREVIOUS" "$WEB_SERVICE:$WEB_PREVIOUS"; do
++            service="${pair%%:*}"
++            previous="${pair#*:}"
++            if [ -n "$previous" ]; then
++              echo "Retour de $service à la révision $previous"
++              gcloud run services update-traffic "$service" \
++                --to-revisions "$previous=100" \
++                --project "$PROJECT_ID" --region "$REGION" \
++                || echo "::error::Retour arrière impossible pour $service"
++            fi
++          done
+diff --git a/.github/workflows/test-gcp-auth.yml b/.github/workflows/test-gcp-auth.yml
+index 70476d8..72e575e 100644
+--- a/.github/workflows/test-gcp-auth.yml
++++ b/.github/workflows/test-gcp-auth.yml
+@@ -1,4 +1,3 @@
+-
+ name: test-gcp-auth
+ 
+ on:
+@@ -23,20 +22,6 @@ jobs:
+     environment: ${{ inputs.environment }}
+ 
+     steps:
+-      - name: Afficher l'identité OIDC (debug)
+-        run: |
+-          TOKEN=$(curl -sS \
+-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=debug" | jq -r .value)
+-
+-          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+-
+-          while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do
+-            PAYLOAD="${PAYLOAD}="
+-          done
+-
+-          echo "$PAYLOAD" | base64 -d | jq '{sub, repository, environment, ref}'
+-
+       - name: Authenticate to Google Cloud
+         uses: google-github-actions/auth@v2
+         with:
+diff --git a/apps/web/app/api/health/route.ts b/apps/web/app/api/health/route.ts
 new file mode 100644
-index 0000000..27f1a76
+index 0000000..21ffab8
 --- /dev/null
-+++ b/.claude/agents/developer.md
-@@ -0,0 +1,37 @@
-+---
-+name: developer
-+description: Développeur. Implémente une tâche précise décrite par l'orchestrateur (API FastAPI dans apps/api, front Next.js dans apps/web), écrit les tests, fait passer test, lint et build, puis commite. À utiliser pour toute écriture de code applicatif.
-+tools: Read, Edit, Write, Grep, Glob, Bash
-+model: sonnet
-+maxTurns: 60
-+color: blue
-+---
++++ b/apps/web/app/api/health/route.ts
+@@ -0,0 +1,4 @@
++// Route de santé utilisée par la CI et par le déploiement
++export function GET() {
++  return Response.json({ status: "OK" });
++}
+diff --git a/infra/envs/dev/main.tf b/infra/envs/dev/main.tf
+index f517ba8..6ceff08 100644
+--- a/infra/envs/dev/main.tf
++++ b/infra/envs/dev/main.tf
+@@ -33,6 +33,7 @@ module "github_deploy" {
+   github_repo      = "kitchncare-dev/kitchn-projetc"
+   github_subject_repo = "kitchncare-dev@359126054/kitchn-projetc@1465363100"
+   runtime_sa_email = module.app.runtime_sa_email
++  web_runtime_sa_email = module.app.web_runtime_sa_email
+   artifact_repo_id = module.app.artifact_repo_id
+ }
+ 
+@@ -42,3 +43,9 @@ output "wif_provider" {
+ output "deploy_sa" {
+   value = module.github_deploy.deploy_service_account
+ }
++output "api_url" {
++  value = module.app.api_url
++}
++output "web_url" {
++  value = module.app.web_url
++}
+diff --git a/infra/envs/prod/main.tf b/infra/envs/prod/main.tf
+index 3dba5e4..9f10685 100644
+--- a/infra/envs/prod/main.tf
++++ b/infra/envs/prod/main.tf
+@@ -29,10 +29,11 @@ module "github_deploy" {
+   source           = "../../modules/github-deploy"
+   project_id       = "kitchn-prod-515310"
+   region           = "europe-west9"
+-  env_name         = "dev"
++  env_name         = "prod"   # corrigé : c'était "dev" par erreur
+   github_repo      = "kitchncare-dev/kitchn-projetc"
+   github_subject_repo = "kitchncare-dev@359126054/kitchn-projetc@1465363100"
+   runtime_sa_email = module.app.runtime_sa_email
++  web_runtime_sa_email = module.app.web_runtime_sa_email
+   artifact_repo_id = module.app.artifact_repo_id
+ }
+ 
+@@ -42,3 +43,9 @@ output "wif_provider" {
+ output "deploy_sa" {
+   value = module.github_deploy.deploy_service_account
+ }
++output "api_url" {
++  value = module.app.api_url
++}
++output "web_url" {
++  value = module.app.web_url
++}
+diff --git a/infra/modules/app/main.tf b/infra/modules/app/main.tf
+index e0aa94c..defc0ed 100644
+--- a/infra/modules/app/main.tf
++++ b/infra/modules/app/main.tf
+@@ -1,4 +1,4 @@
+-# Dépôt d'images Docker
++# Dépôt d'images Docker (les images "api" et "web" y sont publiées par le CI)
+ resource "google_artifact_registry_repository" "images" {
+   project       = var.project_id
+   location      = var.region
+@@ -6,13 +6,20 @@ resource "google_artifact_registry_repository" "images" {
+   format        = "DOCKER"
+ }
+ 
+-# Identité de l'application
++# Identité de l'API (a le droit de joindre Cloud SQL et de lire le mot de passe de la base)
+ resource "google_service_account" "runtime" {
+   project      = var.project_id
+   account_id   = "sa-app-runtime"
+   display_name = "Runtime Cloud Run"
+ }
+ 
++# Identité du front web (aucun droit : il n'accède ni à la base ni aux secrets)
++resource "google_service_account" "web_runtime" {
++  project      = var.project_id
++  account_id   = "sa-web-runtime"
++  display_name = "Runtime Cloud Run - web"
++}
 +
-+Tu es le développeur de ce dépôt. Tu reçois une tâche précise : une issue, un plan, des critères d'acceptation. Tu l'implémentes proprement, rien de plus. Respecte toutes les règles de `CLAUDE.md`.
+ resource "google_project_iam_member" "runtime_sql" {
+   project = var.project_id
+   role    = "roles/cloudsql.client"
+@@ -28,7 +35,7 @@ resource "google_sql_database_instance" "db" {
+   deletion_protection = var.env_name == "prod"
+ 
+   settings {
+-    edition = "ENTERPRISE"      # ← ajoute cette ligne
++    edition = "ENTERPRISE"
+     tier    = var.db_tier
+     backup_configuration { enabled = true }
+   }
+@@ -73,10 +80,14 @@ resource "google_secret_manager_secret_iam_member" "runtime_reads_db" {
+   member    = "serviceAccount:${google_service_account.runtime.email}"
+ }
+ 
+-# Service Cloud Run
+-resource "google_cloud_run_v2_service" "app" {
++# ---------------------------------------------------------------------------
++# Service Cloud Run : API (nom Cloud Run "my-api")
++# Attention : un nom de service Cloud Run n'accepte pas "_", seulement
++# minuscules, chiffres et tirets. Le nom Terraform (my_api) peut en contenir.
++# ---------------------------------------------------------------------------
++resource "google_cloud_run_v2_service" "my_api" {
+   project             = var.project_id
+-  name                = "monapp"
++  name                = "my-api"
+   location            = var.region
+   deletion_protection = var.env_name == "prod"
+ 
+@@ -138,11 +149,64 @@ resource "google_cloud_run_v2_service" "app" {
+   depends_on = [google_secret_manager_secret_iam_member.runtime_reads_db]
+ }
+ 
+-# Accès public (à restreindre en dev si tu veux le garder privé)
+-resource "google_cloud_run_v2_service_iam_member" "public" {
++# ---------------------------------------------------------------------------
++# Service Cloud Run : front web (nom Cloud Run "my-web-app")
++# ---------------------------------------------------------------------------
++resource "google_cloud_run_v2_service" "my_web_app" {
++  project             = var.project_id
++  name                = "my-web-app"
++  location            = var.region
++  deletion_protection = var.env_name == "prod"
 +
-+## Méthode
-+1. **Lis avant d'écrire.** Regarde le code existant autour de ta tâche et reprends son style et sa structure.
-+   Pour `apps/web`, lis `apps/web/AGENTS.md`. Après `npm --prefix apps/web ci`, consulte la documentation Next.js fournie dans `apps/web/node_modules/next/dist/docs/` plutôt que tes souvenirs.
-+2. **Écris d'abord le test** quand c'est possible (pytest pour l'API), puis le code.
-+3. **Reste dans le périmètre.** Pas de refactorisation hors sujet, pas de reformatage de fichiers que tu ne touches pas, pas de fonctionnalité en plus.
-+4. **Vérifie.** Lance les commandes de `CLAUDE.md` pour chaque partie modifiée et corrige jusqu'à ce que tout passe :
-+   - API : `python -m pytest apps/api -q`
-+   - Front : `npm --prefix apps/web run lint` puis `npm --prefix apps/web run build`
-+5. **Commite** avec un message au format `type: description` en français, par exemple `feat: ajoute la route /items`. Ne pousse pas : c'est l'orchestrateur qui pousse.
++  template {
++    service_account = google_service_account.web_runtime.email
 +
-+## Règles techniques
-+- **API** : routes FastAPI typées, validation des entrées avec Pydantic, réponses JSON. Accès à la base uniquement depuis l'API, avec des requêtes paramétrées (jamais de SQL construit par concaténation).
-+- **Front** : appels à l'API côté serveur (Server Components, Route Handlers ou Server Actions) avec `process.env.API_URL`. Pas de secret ni d'adresse interne dans le code exécuté par le navigateur.
-+- **Migrations** : uniquement si la tâche le demande. Toujours compatibles avec la version précédente (ajouter avant de supprimer). Jamais de suppression ni de renommage sans validation humaine écrite dans l'issue.
-+- **Dépendances** : n'en ajoute une que si elle est indispensable, et explique pourquoi dans ton rapport. Mets à jour le fichier de verrouillage (`package-lock.json`) ou `requirements.txt` avec une version fixée.
-+- Tu ne peux pas modifier `infra/`, `.github/`, `.claude/` ni `CLAUDE.md` : c'est bloqué exprès. Si la tâche l'exige, arrête-toi et dis-le.
-+- Ne désactive jamais un test ni une règle de lint pour faire passer la vérification.
++    scaling {
++      min_instance_count = var.min_instances
++      max_instance_count = var.max_instances
++    }
 +
-+## Rapport final
-+Termine par un rapport court destiné à l'orchestrateur :
-+- fichiers modifiés ;
-+- tests ajoutés ;
-+- résultat des commandes de vérification (passé ou échoué, avec l'erreur) ;
-+- dépendances ajoutées et pourquoi ;
-+- migration oui ou non ;
-+- points incertains ou questions.
-diff --git a/.claude/agents/orchestrator.md b/.claude/agents/orchestrator.md
-new file mode 100644
-index 0000000..4e3a177
---- /dev/null
-+++ b/.claude/agents/orchestrator.md
-@@ -0,0 +1,70 @@
-+---
-+name: orchestrator
-+description: Chef de projet. Prend une issue GitHub, la découpe en un plan, confie le code au sous-agent developer, fait relire par le sous-agent reviewer, puis ouvre la PR vers dev. Ne code jamais lui-même. À lancer comme agent principal (claude --agent orchestrator).
-+tools: Agent(developer, reviewer), Read, Grep, Glob, Bash
-+model: inherit
-+color: purple
-+---
++    containers {
++      # Image provisoire : le CI la remplacera à chaque déploiement
++      image = "us-docker.pkg.dev/cloudrun/container/hello"
 +
-+Tu es l'orchestrateur (chef de projet) de ce dépôt. Tu transformes une issue GitHub en une pull request prête à être relue par un humain.
++      ports { container_port = 8080 }
 +
-+Tu **ne modifies jamais de fichier toi-même** : tu n'as pas les outils d'écriture, c'est voulu. Tu lis, tu planifies, tu délègues, tu vérifies, tu ouvres la PR. Respecte toutes les règles de `CLAUDE.md`.
++      env {
++        name  = "ENV"
++        value = var.env_name
++      }
++      # Adresse de l'API, lue par le front côté serveur (process.env.API_URL)
++      env {
++        name  = "API_URL"
++        value = google_cloud_run_v2_service.my_api.uri
++      }
++    }
++  }
 +
-+## Déroulé
-+
-+### 1. Comprendre l'issue
-+- Lis l'issue (numéro fourni dans ta consigne, sinon `gh issue view <numéro>`).
-+- Vérifie qu'elle est réalisable et assez précise : objectif, comportement attendu, critères d'acceptation.
-+- **Arrête-toi sans rien coder** et rends un rapport avec tes questions si :
-+  - l'issue est ambiguë ou contradictoire ;
-+  - elle exige de modifier `infra/`, `.github/`, `.claude/` ou `CLAUDE.md` ;
-+  - elle exige une migration destructive (suppression ou renommage de table ou colonne) sans validation humaine écrite dans l'issue ;
-+  - elle est trop grosse pour une seule PR (propose alors un découpage en plusieurs issues).
-+
-+### 2. Préparer le plan
-+- Explore le code concerné (Read, Grep, Glob) sans rien modifier.
-+- Rédige un plan court : fichiers à créer ou modifier, tests à ajouter, migration oui ou non, risques.
-+- Crée la branche depuis `dev` : `git fetch origin dev` puis `git switch -c ai/<numéro>-<description-courte> origin/dev`. Si la consigne du workflow t'indique déjà une branche, utilise-la.
-+
-+### 3. Faire développer
-+Délègue au sous-agent **developer** avec une consigne complète, car il ne voit pas cette conversation :
-+- le texte de l'issue et ses critères d'acceptation ;
-+- ton plan ;
-+- les commandes de vérification de `CLAUDE.md` à faire passer.
-+
-+Ensuite, vérifie toi-même : relance les commandes de test, lint et build de la partie modifiée, et lis `git diff origin/dev...HEAD`.
-+
-+### 4. Faire relire
-+Délègue au sous-agent **reviewer** en lui donnant seulement le numéro et le texte de l'issue et le nom de la branche. **Ne lui transmets pas le raisonnement du developer** : il doit juger le code par lui-même.
-+- `VERDICT: APPROVE` : passe à l'étape 5.
-+- `VERDICT: CHANGES_REQUESTED` : renvoie les remarques au developer, puis refais relire.
-+- **Au maximum 2 allers-retours.** Au-delà, arrête-toi et rends un rapport : ce qui marche, ce qui bloque.
-+
-+Cette relecture est une pré-relecture. La relecture officielle a lieu dans la PR, par un autre lancement du reviewer, puis par un humain.
-+
-+### 5. Ouvrir la PR
-+- Vérifie que le developer a bien commité (`git status` doit être propre) et pousse : `git push -u origin <branche>`.
-+- Ouvre la PR **vers `dev`** :
-+  `gh pr create --base dev --title "<type>: <description>" --body "<corps>"`
-+- Corps de la PR, en français, avec exactement ces sections :
-+
-+```
-+Closes #<numéro>
-+
-+## Résumé
-+<ce qui a changé et pourquoi, en 2 à 5 lignes>
-+
-+## Tests
-+<tests ajoutés ou modifiés, commandes lancées et résultat>
-+
-+## Migration
-+<« Aucune » ou description de la migration et de sa compatibilité>
-+
-+## Points d'attention pour la relecture
-+<risques, choix discutables, nouvelles dépendances et leur justification>
-+```
-+
-+Tu ne fusionnes jamais la PR et tu ne l'approuves jamais.
-+
-+## Rapport final
-+Termine toujours par un rapport court : lien de la PR (ou raison de l'arrêt), ce qui a été fait, questions restantes.
-diff --git a/.claude/agents/reviewer.md b/.claude/agents/reviewer.md
-new file mode 100644
-index 0000000..767c67d
---- /dev/null
-+++ b/.claude/agents/reviewer.md
-@@ -0,0 +1,67 @@
-+---
-+name: reviewer
-+description: Relecteur et testeur, indépendant du développeur. Relit les changements d'une branche ou d'une PR par rapport à dev, relance les tests, et rend un verdict APPROVE ou CHANGES_REQUESTED. Ne modifie jamais le code. À utiliser après chaque développement et sur chaque PR.
-+tools: Read, Grep, Glob, Bash
-+model: opus
-+maxTurns: 30
-+color: orange
-+---
-+
-+Tu es le relecteur (testeur et validateur) de ce dépôt. Tu n'as **pas écrit** ce code et tu ne le modifies pas : tu le juges. Tu n'as pas d'outil d'écriture, et tu n'utilises pas Bash pour modifier des fichiers. Respecte toutes les règles de `CLAUDE.md`.
-+
-+## Méthode
-+1. Récupère le contexte : l'issue (`gh issue view <numéro>`) et les changements :
-+   - pour une branche locale : `git diff origin/dev...HEAD` ;
-+   - pour une PR : `gh pr diff <numéro>` et `gh pr view <numéro>`.
-+2. Lis les fichiers modifiés **en entier**, pas seulement le diff, pour comprendre le contexte.
-+3. Relance toi-même les vérifications de la partie modifiée :
-+   - API : `pip install -r apps/api/requirements.txt` puis `python -m pytest apps/api -q` ;
-+   - Front : `npm --prefix apps/web ci`, `npm --prefix apps/web run lint`, `npm --prefix apps/web run build`.
-+4. Passe la liste de contrôle ci-dessous.
-+
-+## Liste de contrôle
-+**Bloquant** (entraîne `CHANGES_REQUESTED`) :
-+- Les tests, le lint ou le build échouent.
-+- Le code ne répond pas à l'issue ou à ses critères d'acceptation.
-+- Aucun test pour une nouvelle fonctionnalité ou une correction de bug de l'API.
-+- Un secret, un mot de passe, une clé ou un jeton apparaît dans le code, les tests ou la PR.
-+- Un fichier de `infra/`, `.github/`, `.claude/` ou un `CLAUDE.md` est modifié.
-+- Une faille de sécurité : SQL construit par concaténation, entrée non validée, secret ou `API_URL` exposé au navigateur, désactivation d'une protection.
-+- Une migration non compatible avec la version précédente, ou une suppression ou un renommage sans validation humaine dans l'issue.
-+- Un test ou une règle de lint désactivé pour faire passer la CI.
-+- La route `/health` (API) ou `/api/health` (front) est cassée ou modifiée.
-+
-+**Non bloquant** (à signaler sans bloquer) :
-+- Lisibilité, nommage, duplication, commentaires manquants.
-+- Changements hors périmètre de l'issue.
-+- Nouvelle dépendance mal justifiée.
-+
-+Sois précis et factuel : chaque remarque cite un fichier et une ligne, et propose une correction. Ne bloque pas pour une question de goût.
-+
-+## Format de réponse (obligatoire)
-+La **première ligne** est exactement l'une des deux suivantes, car le workflow la lit automatiquement :
-+
-+```
-+VERDICT: APPROVE
-+VERDICT: CHANGES_REQUESTED
-+```
-+
-+Puis, en français :
-+
-+```
-+## Vérifications
-+- Tests API : passé / échoué / non concerné
-+- Lint front : passé / échoué / non concerné
-+- Build front : passé / échoué / non concerné
-+
-+## Bloquant
-+- `chemin/fichier.py:42` : problème, puis correction proposée
-+(ou « Aucun »)
-+
-+## Non bloquant
-+- ...
-+(ou « Aucun »)
-+
-+## Migration
-+« Aucune » ou ton avis sur sa sécurité (un humain doit la relire de toute façon)
-+```
-diff --git a/.claude/settings.json b/.claude/settings.json
-new file mode 100644
-index 0000000..b0dbb1e
---- /dev/null
-+++ b/.claude/settings.json
-@@ -0,0 +1,81 @@
-+{
-+  "$schema": "https://json-schema.org/claude-code-settings.json",
-+  "permissions": {
-+    "allow": [
-+      "Bash(git status)",
-+      "Bash(git status *)",
-+      "Bash(git diff *)",
-+      "Bash(git log *)",
-+      "Bash(git show *)",
-+      "Bash(git branch *)",
-+      "Bash(git fetch *)",
-+      "Bash(git switch *)",
-+      "Bash(git checkout -b *)",
-+      "Bash(git add *)",
-+      "Bash(git commit *)",
-+      "Bash(git push -u origin ai/*)",
-+      "Bash(git push origin ai/*)",
-+
-+      "Bash(gh issue view *)",
-+      "Bash(gh pr view *)",
-+      "Bash(gh pr diff *)",
-+      "Bash(gh pr create *)",
-+
-+      "Bash(pip install -r apps/api/requirements.txt)",
-+      "Bash(python -m pytest *)",
-+      "Bash(pytest *)",
-+
-+      "Bash(npm --prefix apps/web ci)",
-+      "Bash(npm --prefix apps/web run lint)",
-+      "Bash(npm --prefix apps/web run build)"
-+    ],
-+    "ask": [
-+      "Bash(npm install *)",
-+      "Bash(npm --prefix apps/web install *)",
-+      "Bash(pip install *)",
-+      "WebFetch"
-+    ],
-+    "deny": [
-+      "Read(**/.env)",
-+      "Read(**/.env.*)",
-+      "Read(**/*.tfstate)",
-+      "Read(**/*.tfstate.*)",
-+      "Read(**/*.tfvars)",
-+      "Read(**/gha-creds-*.json)",
-+      "Edit(**/.env)",
-+      "Edit(**/.env.*)",
-+
-+      "Edit(infra/**)",
-+      "Edit(.github/**)",
-+      "Edit(.claude/**)",
-+      "Edit(**/CLAUDE.md)",
-+
-+      "Bash(terraform *)",
-+      "Bash(gcloud *)",
-+      "Bash(gsutil *)",
-+      "Bash(bq *)",
-+      "Bash(kubectl *)",
-+
-+      "Bash(git push --force*)",
-+      "Bash(git push -f*)",
-+      "Bash(git push * main*)",
-+      "Bash(git push * dev*)",
-+      "Bash(git push origin HEAD*)",
-+      "Bash(git reset --hard *)",
-+
-+      "Bash(gh pr merge *)",
-+      "Bash(gh pr review *)",
-+      "Bash(gh api *)",
-+      "Bash(gh secret *)",
-+      "Bash(gh variable *)",
-+      "Bash(gh workflow *)",
-+      "Bash(gh repo *)",
-+      "Bash(gh release *)",
-+
-+      "Bash(sudo *)",
-+      "Bash(rm -rf *)",
-+      "Bash(curl *)",
-+      "Bash(wget *)"
++  # Important : Terraform ne doit pas écraser l'image déployée par le CI
++  lifecycle {
++    ignore_changes = [
++      template[0].containers[0].image,
++      client,
++      client_version,
 +    ]
 +  }
 +}
-diff --git a/.gitignore b/.gitignore
-index a4741ee..adbeb70 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -48,3 +48,6 @@ dist/
- .env
- playwright-report/
- test-results/
 +
-+# Réglages Claude Code personnels (non partagés)
-+.claude/settings.local.json
-diff --git a/CLAUDE.md b/CLAUDE.md
-new file mode 100644
-index 0000000..b79b6ae
---- /dev/null
-+++ b/CLAUDE.md
-@@ -0,0 +1,68 @@
-+# CLAUDE.md : règles du projet pour les agents
++# Accès public aux deux services (à restreindre plus tard si besoin)
++resource "google_cloud_run_v2_service_iam_member" "api_public" {
++  project  = var.project_id
++  location = var.region
++  name     = google_cloud_run_v2_service.my_api.name
++  role     = "roles/run.invoker"
++  member   = "allUsers"
++}
 +
-+Ce fichier est lu automatiquement par Claude Code au démarrage, en local comme dans GitHub Actions.
-+Il s'applique à tous les agents (orchestrateur, développeur, relecteur).
++resource "google_cloud_run_v2_service_iam_member" "web_public" {
+   project  = var.project_id
+   location = var.region
+-  name     = google_cloud_run_v2_service.app.name
++  name     = google_cloud_run_v2_service.my_web_app.name
+   role     = "roles/run.invoker"
+   member   = "allUsers"
+ }
+diff --git a/infra/modules/app/outputs.tf b/infra/modules/app/outputs.tf
+index ba2e7bb..46db27e 100644
+--- a/infra/modules/app/outputs.tf
++++ b/infra/modules/app/outputs.tf
+@@ -2,6 +2,18 @@ output "runtime_sa_email" {
+   value = google_service_account.runtime.email
+ }
+ 
++output "web_runtime_sa_email" {
++  value = google_service_account.web_runtime.email
++}
 +
-+## Le projet
+ output "artifact_repo_id" {
+   value = google_artifact_registry_repository.images.repository_id
+-}
+\ No newline at end of file
++}
 +
-+Application web déployée sur Google Cloud Run, en deux services :
++output "api_url" {
++  value = google_cloud_run_v2_service.my_api.uri
++}
 +
-+| Dossier | Rôle | Stack | Service Cloud Run |
-+|---|---|---|---|
-+| `apps/api` | API | Python 3.12, FastAPI, pytest | `my-api` |
-+| `apps/web` | Front | Next.js 16 (App Router), React 19, TypeScript, Tailwind 4, shadcn/ui | `my-web-app` |
++output "web_url" {
++  value = google_cloud_run_v2_service.my_web_app.uri
++}
+diff --git a/infra/modules/github-deploy/main.tf b/infra/modules/github-deploy/main.tf
+index 09876d3..2bb18ad 100644
+--- a/infra/modules/github-deploy/main.tf
++++ b/infra/modules/github-deploy/main.tf
+@@ -40,7 +40,7 @@ resource "google_service_account" "deploy" {
+ resource "google_service_account_iam_member" "github_impersonation" {
+   service_account_id = google_service_account.deploy.name
+   role               = "roles/iam.workloadIdentityUser"
+-    member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/subject/repo:${var.github_subject_repo}:environment:${var.env_name}"
++  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.github.workload_identity_pool_id}/subject/repo:${var.github_subject_repo}:environment:${var.env_name}"
+ }
+ 
+ # Ce que ce compte a le droit de faire : le strict minimum
+@@ -56,6 +56,13 @@ resource "google_service_account_iam_member" "act_as_runtime" {
+   member             = "serviceAccount:${google_service_account.deploy.email}"
+ }
+ 
++# Même droit pour l'identité du front web (sinon impossible de déployer my-web-app)
++resource "google_service_account_iam_member" "act_as_web_runtime" {
++  service_account_id = "projects/${var.project_id}/serviceAccounts/${var.web_runtime_sa_email}"
++  role               = "roles/iam.serviceAccountUser"
++  member             = "serviceAccount:${google_service_account.deploy.email}"
++}
 +
-+- Base de données : Cloud SQL PostgreSQL 16, joignable **uniquement par l'API** (socket `/cloudsql`, mot de passe dans la variable `DB_PASSWORD`).
-+- Le front ne parle jamais à la base : il appelle l'API, dont l'adresse est dans `API_URL`, lue **côté serveur** uniquement (jamais exposée au navigateur, pas de `NEXT_PUBLIC_API_URL`).
-+- Avant de modifier `apps/web`, lis `apps/web/AGENTS.md` : cette version de Next.js diffère de ce que tu connais, sa documentation est dans `apps/web/node_modules/next/dist/docs/` après `npm ci`.
-+- `apps/old_api/` (ancienne API NestJS) et `docs/prisma-8.md` sont **obsolètes** : ne t'en sers pas comme modèle, ne les modifie pas. L'API est en Python, pas en Node, et n'utilise pas Prisma.
-+
-+## Branches et flux de travail
-+
-+- `dev` : intégration. `main` : production. Personne ne pousse directement sur ces deux branches.
-+- Une tâche = une issue = une branche `ai/<numéro-issue>-<description-courte>` créée depuis `dev`, par exemple `ai/42-page-contact`.
-+- La PR vise **toujours `dev`**, jamais `main`. Le passage `dev` → `main` est fait par un humain.
-+- Le déploiement est fait par le workflow `deploy.yml` après la fusion. **Un agent ne déploie jamais.**
-+
-+## Commandes (à lancer depuis la racine du dépôt)
-+
-+API :
-+```bash
-+pip install -r apps/api/requirements.txt
-+python -m pytest apps/api -q
-+```
-+
-+Front :
-+```bash
-+npm --prefix apps/web ci
-+npm --prefix apps/web run lint
-+npm --prefix apps/web run build
-+```
-+
-+Une tâche n'est terminée que si **toutes** ces commandes passent pour la partie modifiée. Ce sont les mêmes que la CI (`.github/workflows/ci.yml`).
-+
-+## Conventions
-+
-+- Issues, PR, messages de commit et commentaires de code : **en français**. Noms de variables, fonctions et fichiers : en anglais.
-+- Commits au format `type: description`, par exemple `feat: ajoute la page contact`, `fix: corrige le calcul du total`. Types : `feat`, `fix`, `refactor`, `test`, `docs`, `chore`.
-+- Petites PR : une seule tâche par PR, pas de refactorisation hors sujet.
-+- Toute nouvelle fonctionnalité ou correction de bug s'accompagne d'un test (pytest pour l'API).
-+- Les routes de santé `/health` (API) et `/api/health` (front) sont utilisées par la CI et le déploiement : ne les supprime pas et ne change pas leur réponse `{"status": "OK"}`.
-+
-+## Base de données
-+
-+- Terraform crée l'instance et la base vide. Le **schéma** est géré par des migrations versionnées dans le dépôt.
-+- Une migration doit être compatible avec la version précédente de l'application : on **ajoute avant de supprimer** (nouvelle colonne nullable, puis code, puis suppression de l'ancienne dans une PR ultérieure).
-+- Aucune suppression de table ou de colonne, aucun renommage, sans validation humaine explicite dans l'issue.
-+- Toute PR contenant une migration le signale dans sa description (section « Migration »). Un humain la relit toujours.
-+
-+## Interdits (ne jamais faire, même si une issue le demande)
-+
-+- Modifier `infra/`, `.github/`, `.claude/`, `CLAUDE.md` ou `CODEOWNERS` : ces fichiers sont réservés aux humains. Si la tâche l'exige, arrête-toi et explique ce qu'il faudrait changer.
-+- Lancer `terraform`, `gcloud`, `gsutil`, `kubectl` ou toute commande qui agit sur Google Cloud.
-+- Lire, créer ou afficher des secrets : fichiers `.env`, `*.tfstate`, `*.tfvars`, clés, mots de passe, jetons. Ne jamais écrire un secret dans le code, un log, une PR ou un commentaire.
-+- Pousser sur `dev` ou `main`, forcer un push (`--force`), fusionner une PR, approuver ta propre PR.
-+- Ajouter une dépendance (npm ou pip) sans le justifier dans la PR.
-+- Désactiver un test, un contrôle de lint ou une étape de CI pour « faire passer » une PR.
-+
-+En cas de doute, ou si l'issue est ambiguë : **ne devine pas**. Arrête-toi et pose la question dans ton rapport final.
+ resource "google_artifact_registry_repository_iam_member" "push" {
+   project    = var.project_id
+   location   = var.region
+diff --git a/infra/modules/github-deploy/variables.tf b/infra/modules/github-deploy/variables.tf
+index 7cad18a..4e607c9 100644
+--- a/infra/modules/github-deploy/variables.tf
++++ b/infra/modules/github-deploy/variables.tf
+@@ -1,10 +1,11 @@
+-variable "project_id"       { type = string }
+-variable "region"           { type = string }
+-variable "env_name"         { type = string }
+-variable "github_repo"      { type = string }
+-variable "runtime_sa_email" { type = string }
+-variable "artifact_repo_id" { type = string }
++variable "project_id"           { type = string }
++variable "region"               { type = string }
++variable "env_name"             { type = string }
++variable "github_repo"          { type = string }
++variable "runtime_sa_email"     { type = string }
++variable "web_runtime_sa_email" { type = string }
++variable "artifact_repo_id"     { type = string }
+ variable "github_subject_repo" {
+   type        = string
+   description = "Partie du sub OIDC entre 'repo:' et ':environment:', ex. org@ID/repo@ID"
+-}
+\ No newline at end of file
++}
