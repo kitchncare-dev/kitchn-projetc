@@ -134,6 +134,3 @@ jobs:
             ghcr.io/gitleaks/gitleaks:latest \
             dir --redact --verbose --no-banner /repo
           echo "API URL: $URL"
-
-          curl -fsS --retry 10 --retry-delay 3 \
-            --retry-all-errors "$URL/health"
