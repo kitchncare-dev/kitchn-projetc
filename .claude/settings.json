@@ -9,12 +9,17 @@
       "Bash(git show *)",
       "Bash(git branch *)",
       "Bash(git fetch *)",
+      "Bash(git pull *)",
       "Bash(git switch *)",
       "Bash(git checkout -b *)",
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git push -u origin ai/*)",
       "Bash(git push origin ai/*)",
+
+      "Edit(.claude/**)",
+      "Edit(CLAUDE.md)",
+      "Edit(.github/CODEOWNERS)",
 
       "Bash(gh issue view *)",
       "Bash(gh pr view *)",
@@ -46,9 +51,7 @@
       "Edit(**/.env.*)",
 
       "Edit(infra/**)",
-      "Edit(.github/**)",
-      "Edit(.claude/**)",
-      "Edit(**/CLAUDE.md)",
+      "Edit(.github/workflows/**)",
 
       "Bash(terraform *)",
       "Bash(gcloud *)",
@@ -59,7 +62,7 @@
       "Bash(git push --force*)",
       "Bash(git push -f*)",
       "Bash(git push * main*)",
-      "Bash(git push * dev*)",
+      "Bash(git push * dev)",
       "Bash(git push origin HEAD*)",
       "Bash(git reset --hard *)",
 
