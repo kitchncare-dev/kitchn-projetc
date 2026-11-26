@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git fetch *)",
+      "Bash(git pull *)",
+      "Bash(git switch *)",
+      "Bash(git checkout -b *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push -u origin ai/*)",
+      "Bash(git push origin ai/*)",
+
+      "Edit(.claude/**)",
+      "Edit(CLAUDE.md)",
+      "Edit(.github/CODEOWNERS)",
+
+      "Bash(gh issue view *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr create *)",
+
+      "Bash(pip install -r apps/api/requirements.txt)",
+      "Bash(python -m pytest *)",
+      "Bash(pytest *)",
+
+      "Bash(npm --prefix apps/web ci)",
+      "Bash(npm --prefix apps/web run lint)",
+      "Bash(npm --prefix apps/web run build)"
+    ],
+    "ask": [
+      "Bash(npm install *)",
+      "Bash(npm --prefix apps/web install *)",
+      "Bash(pip install *)",
+      "WebFetch"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.tfstate)",
+      "Read(**/*.tfstate.*)",
+      "Read(**/*.tfvars)",
+      "Read(**/gha-creds-*.json)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+
+      "Edit(infra/**)",
+      "Edit(.github/workflows/**)",
+
+      "Bash(terraform *)",
+      "Bash(gcloud *)",
+      "Bash(gsutil *)",
+      "Bash(bq *)",
+      "Bash(kubectl *)",
+
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * main*)",
+      "Bash(git push * dev)",
+      "Bash(git push origin HEAD*)",
+      "Bash(git reset --hard *)",
+
+      "Bash(gh pr merge *)",
+      "Bash(gh pr review *)",
+      "Bash(gh api *)",
+      "Bash(gh secret *)",
+      "Bash(gh variable *)",
+      "Bash(gh workflow *)",
+      "Bash(gh repo *)",
+      "Bash(gh release *)",
+
+      "Bash(sudo *)",
+      "Bash(rm -rf *)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ]
+  }
+}
