@@ -38,6 +38,9 @@ jobs:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
 
     steps:
+      - name: Heure de début
+        run: echo "START_TS=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           ref: dev
@@ -59,7 +62,9 @@ jobs:
         run: |
           mkdir -p .agent-context
           echo ".agent-context/" >> .git/info/exclude
-          gh issue view "$ISSUE_NUMBER" --repo "${{ github.repository }}" --comments > .agent-context/issue.md
+          # --json : sans terminal, « gh issue view --comments » n'affiche que les commentaires (ni titre ni corps)
+          gh issue view "$ISSUE_NUMBER" --repo "${{ github.repository }}" --json number,title,body,comments \
+            --jq '"# Issue #\(.number) : \(.title)\n\n\(.body)\n\n## Commentaires\n\n" + ([.comments[] | "### \(.author.login) (\(.createdAt))\n\n\(.body)\n"] | join("\n"))' > .agent-context/issue.md
           echo "Issue enregistrée : $(wc -l < .agent-context/issue.md) lignes"
 
       - name: Prévenir dans l'issue
@@ -208,6 +213,34 @@ jobs:
           STATUS=$(echo "$RESULT" | jq -r '.status // "inconnu"')
           REPORT=$(echo "$RESULT" | jq -r '.report // "Aucun rapport (agent interrompu : limite de tours, de budget, de temps, ou erreur)."')
 
+          # Consommation : tokens par modèle (sous-agents compris), durée de l'agent et du job
+          FILE="$RUNNER_TEMP/claude-execution-output.json"
+          ELAPSED=$(( $(date +%s) - ${START_TS:-$(date +%s)} ))
+          {
+            echo "<details><summary>Consommation</summary>"
+            echo
+            if [ -f "$FILE" ]; then
+              jq -r '
+                (if type == "array" then . else [.] end) | [.[] | select(.type == "result")] | last as $r |
+                ($r.modelUsage // {}) as $m |
+                ([$m[] | (.inputTokens // 0) + (.outputTokens // 0) + (.cacheReadInputTokens // 0) + (.cacheCreationInputTokens // 0)] | add // 0) as $total |
+                "| Modèle | Entrée | Sortie | Cache lu | Cache écrit |",
+                "|---|---:|---:|---:|---:|",
+                ($m | to_entries[] | "| \(.key) | \(.value.inputTokens // 0) | \(.value.outputTokens // 0) | \(.value.cacheReadInputTokens // 0) | \(.value.cacheCreationInputTokens // 0) |"),
+                "",
+                "- **Total tokens** : \($total)",
+                "- **Tours** : \($r.num_turns // "?")",
+                "- **Durée de l'"'"'agent** : \((($r.duration_ms // 0) / 1000 | floor) as $s | "\($s / 60 | floor) min \($s % 60) s")",
+                "- **Coût estimé** : \(($r.total_cost_usd // 0) * 100 | round / 100) $ (estimation ; avec un abonnement, c'"'"'est ton quota qui est consommé)"
+              ' "$FILE" 2>/dev/null || echo "Consommation indisponible."
+            else
+              echo "Consommation indisponible (l'agent n'a pas produit de journal)."
+            fi
+            echo "- **Durée totale du job** : $((ELAPSED / 60)) min $((ELAPSED % 60)) s"
+            echo
+            echo "</details>"
+          } > "$RUNNER_TEMP/usage.md"
+
           {
             if [ -n "$PR_URL" ]; then
               echo "✅ PR ouverte : $PR_URL"
@@ -224,6 +257,8 @@ jobs:
             echo "$REPORT"
             echo
             echo "</details>"
+            echo
+            cat "$RUNNER_TEMP/usage.md"
             echo
             echo "[Détails de l'exécution]($RUN_URL)"
           } > "$RUNNER_TEMP/comment.md"
