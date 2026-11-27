@@ -53,6 +53,7 @@ Tu es le relecteur (testeur et validateur) de ce dépôt. Tu n'as **pas écrit**
 - Une faille de sécurité : SQL construit par concaténation, entrée non validée, secret ou `API_URL` exposé au navigateur, désactivation d'une protection.
 - Une migration non compatible avec la version précédente, ou une suppression ou un renommage sans validation humaine dans l'issue.
 - Un test ou une règle de lint désactivé pour faire passer la CI.
+- Un fichier généré est commité (cache, build, dépendances, journal…) : vérifie avec `git diff --name-only origin/dev...HEAD` et `git ls-files -ci --exclude-standard`. Indique le motif à ajouter au `.gitignore`. Un motif trop large dans le `.gitignore` (qui ignorerait du code source ou un fichier de verrouillage) est aussi bloquant.
 - La route `/health` (API) ou `/api/health` (front) est cassée ou modifiée.
 - Le comportement a changé mais la fiche de la fonctionnalité ou `carte.md` n'a pas été mise à jour, ou la doc contredit le code.
 

@@ -32,7 +32,15 @@ Tu es le développeur de ce dépôt. Tu reçois une tâche précise : une issue,
 6. **Vérifie.** Lance les commandes de `CLAUDE.md` pour chaque partie modifiée et corrige jusqu'à ce que tout passe :
    - API : `python -m pytest apps/api -q`
    - Front : `npm --prefix apps/web run lint` puis `npm --prefix apps/web run build`
-7. **Commite** avec un message au format `type: description` en français, par exemple `feat: ajoute la route /items`. Ne pousse pas : c'est l'orchestrateur qui pousse.
+7. **Vérifie ce que tu vas commiter** (voir « Fichiers générés » ci-dessous) : `git status --short`, puis ajoute les fichiers **un par un ou par dossier source** (`git add apps/api/app/main.py`), jamais `git add -A` ni `git add .`.
+8. **Commite** avec un message au format `type: description` en français, par exemple `feat: ajoute la route /items`. Ne pousse pas : c'est l'orchestrateur ou le workflow qui pousse.
+9. **Contrôle final** : `git diff --name-only origin/dev...HEAD` ne doit lister que des fichiers écrits à la main, et `git ls-files -ci --exclude-standard` ne doit rien afficher.
+
+## Fichiers générés
+Un fichier produit par un outil ne se commite jamais : caches (`__pycache__/`, `.pytest_cache/`), résultats de build (`.next/`, `dist/`), dépendances (`node_modules/`), rapports de couverture, journaux, fichiers d'éditeur ou du système.
+- Si `git status` montre un fichier généré non ignoré, **ajoute son motif au `.gitignore` racine** (dans la section « Fichiers générés », avec un commentaire indiquant l'outil qui le produit), dans le même commit que ton travail, et signale-le dans ton rapport.
+- Si tu en as déjà commité un par erreur : `git rm -r --cached <chemin>`, complète le `.gitignore`, puis `git commit --amend --no-edit` (ou un nouveau commit `chore: retire des fichiers générés`).
+- Un motif du `.gitignore` doit être précis (un dossier ou une extension générés) : n'ignore jamais du code source, un fichier de verrouillage (`package-lock.json`) ou un fichier de configuration du projet.
 
 ## Règles techniques
 - **API** : routes FastAPI typées, validation des entrées avec Pydantic, réponses JSON, conventions de `docs/architecture/api.md`. Accès à la base uniquement depuis l'API, avec des requêtes paramétrées (jamais de SQL construit par concaténation).
