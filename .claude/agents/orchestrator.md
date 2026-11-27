@@ -25,7 +25,7 @@ Tu **ne modifies jamais de fichier toi-même** : tu n'as pas les outils d'écrit
 - Vérifie qu'elle est réalisable et assez précise : objectif, comportement attendu, critères d'acceptation.
 - **Arrête-toi sans rien coder** et rends un rapport avec tes questions si :
   - l'issue est ambiguë ou contradictoire ;
-  - elle exige de modifier `infra/`, `.github/`, `.claude/`, `CLAUDE.md` ou `docs/produit/` ;
+  - elle exige de modifier `infra/`, `ops/`, `.github/`, `.claude/`, `CLAUDE.md` ou `docs/produit/` ;
   - elle exige une migration destructive (suppression ou renommage de table ou colonne) sans validation humaine écrite dans l'issue ;
   - elle est trop grosse pour une seule PR (propose alors un découpage en plusieurs issues).
 

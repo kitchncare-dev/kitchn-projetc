@@ -223,3 +223,14 @@ jobs:
                 || echo "::error::Retour arrière impossible pour $service"
             fi
           done
+
+      # Notification Telegram du résultat (dev uniquement). Rien n'est envoyé si les secrets
+      # TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID n'existent pas.
+      - name: Notification Telegram
+        if: always() && github.ref_name == 'dev'
+        uses: ./.github/actions/telegram-notify
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          text: "${{ job.status == 'success' && '🚀 Déploiement dev réussi' || '❌ Déploiement dev échoué (retour arrière automatique)' }} — API : ${{ env.DEPLOY_API == 'true' && 'déployée' || 'inchangée' }}, web : ${{ env.DEPLOY_WEB == 'true' && 'déployé' || 'inchangé' }}\n${{ github.event.head_commit.message || 'lancement manuel' }}"
+          buttons: '[[{"text":"Voir l’exécution","url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}]]'

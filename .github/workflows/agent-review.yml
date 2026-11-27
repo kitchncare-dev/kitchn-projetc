@@ -230,6 +230,16 @@ jobs:
 
           echo "verdict=$VERDICT" >> "$GITHUB_ENV"
 
+      # Action prise sur dev (relue par un humain), jamais dans le dossier de la PR
+      - name: Notification Telegram
+        if: always()
+        uses: kitchncare-dev/kitchn-projetc/.github/actions/telegram-notify@dev
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          text: "${{ env.verdict == 'APPROVE' && '✅' || '🔴' }} Relecture IA de la PR #${{ github.event.pull_request.number }} : ${{ env.verdict || 'pas de verdict' }}\n${{ github.event.pull_request.title }}"
+          buttons: '[[{"text":"Voir la PR","url":"${{ github.event.pull_request.html_url }}"}]]'
+
       # Le check « agent-review / reviewer » échoue si des changements sont demandés.
       # Il pourra être rendu obligatoire dans le ruleset protect-dev à l'étape 9.
       - name: Résultat

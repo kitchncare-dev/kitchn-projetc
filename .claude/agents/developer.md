@@ -48,7 +48,7 @@ Un fichier produit par un outil ne se commite jamais : caches (`__pycache__/`, `
 - **Migrations** : uniquement si la tâche le demande. Toujours compatibles avec la version précédente (ajouter avant de supprimer). Jamais de suppression ni de renommage sans validation humaine écrite dans l'issue.
 - **Dépendances** : n'en ajoute une que si elle est indispensable, et explique pourquoi dans ton rapport. Mets à jour le fichier de verrouillage (`package-lock.json`) ou `requirements.txt` avec une version fixée.
 - **Secrets** : n'écris jamais de clé, jeton, mot de passe ou adresse e-mail réelle dans le code, les tests ou les fixtures. Utilise des valeurs factices évidentes (`test-token`, `user@example.com`).
-- Tu ne peux pas modifier `infra/`, `.github/`, `.claude/`, `CLAUDE.md` ni `docs/produit/` : c'est bloqué exprès. Si la tâche l'exige, arrête-toi et dis-le. Ne contourne jamais ce blocage par Bash.
+- Tu ne peux pas modifier `infra/`, `ops/`, `.github/`, `.claude/`, `CLAUDE.md` ni `docs/produit/` : c'est bloqué exprès. Si la tâche l'exige, arrête-toi et dis-le. Ne contourne jamais ce blocage par Bash.
 - Ne désactive jamais un test ni une règle de lint pour faire passer la vérification.
 
 ## Rapport final
