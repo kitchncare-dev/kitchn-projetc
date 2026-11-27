@@ -120,8 +120,9 @@ def test_reply_to_notification_comments_issue(calls):
     assert (method, path) == ("POST", "/issues/12/comments")
 
 
-def test_unconfigured_owner_only_gives_id(calls, monkeypatch):
-    monkeypatch.setenv("TELEGRAM_OWNER_ID", "")
+@pytest.mark.parametrize("value", ["", "0"])
+def test_unconfigured_owner_only_gives_id(calls, monkeypatch, value):
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", value)
     post(message("bonjour", user=5555))
     assert calls["github"] == []
     assert "5555" in sent_texts(calls)[0]

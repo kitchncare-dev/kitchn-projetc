@@ -47,8 +47,9 @@ def setting(name: str) -> str:
 
 
 def owner_id() -> int | None:
+    """Identifiant Telegram du propriétaire ; None (mode mise en service) s'il vaut 0 ou est absent."""
     value = setting("TELEGRAM_OWNER_ID")
-    return int(value) if value.isdigit() else None
+    return int(value) if value.isdigit() and int(value) > 0 else None
 
 
 # ---------------------------------------------------------------------------
