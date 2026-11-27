@@ -62,8 +62,6 @@
       "Edit(**/.env.*)",
 
       "Edit(infra/**)",
-      "Edit(.github/**)",
-      "Edit(.claude/**)",
       "Edit(**/CLAUDE.md)",
       "Edit(docs/produit/**)",
 
