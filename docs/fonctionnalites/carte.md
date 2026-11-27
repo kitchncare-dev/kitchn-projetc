@@ -5,7 +5,7 @@ Chaque ligne renvoie à sa fiche (modèle : `_modele.md`).
 
 | Code | Fonctionnalité | Statut | Dépend de | Utilisée par | Fiche |
 |---|---|---|---|---|---|
-| F00 | Socle technique (routes de santé, déploiement) | faite | — | toutes | — |
+| F00 | Socle technique (routes de santé, déploiement) | faite | — | toutes | `F00-socle.md` |
 | F01 | <à définir par le propriétaire> | prévue | F00 | | `F01-<nom>.md` |
 
 ## Règles
