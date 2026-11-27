@@ -20,6 +20,10 @@
       "Bash(git checkout -b *)",
       "Bash(git add *)",
       "Bash(git commit *)",
+      "Bash(git rm --cached *)",
+      "Bash(git rm -r --cached *)",
+      "Bash(git restore *)",
+      "Bash(git mv *)",
       "Bash(git ls-files)",
       "Bash(git ls-files *)",
       "Bash(git grep *)",
@@ -62,6 +66,8 @@
       "Edit(**/.env.*)",
 
       "Edit(infra/**)",
+      "Edit(.github/**)",
+      "Edit(.claude/**)",
       "Edit(**/CLAUDE.md)",
       "Edit(docs/produit/**)",
 

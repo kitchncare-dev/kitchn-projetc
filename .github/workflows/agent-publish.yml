@@ -1,0 +1,94 @@
+name: agent-publish
+
+# Publie le travail sauvegardé d'une exécution de « agent-dev », SANS relancer l'agent
+# (aucun token Claude consommé). À utiliser quand la publication a échoué
+# (droits, contrôle automatique corrigé depuis, etc.), ou pour publier un travail
+# que l'orchestrateur a rendu « blocked » mais que tu juges correct.
+#
+# Lancement : Actions → agent-publish → Run workflow → numéro de l'exécution de agent-dev
+# (le numéro est dans l'URL de l'exécution, et dans le compte rendu de l'issue).
+# Les mêmes contrôles que dans agent-dev s'appliquent : branche, fichiers protégés, fichiers générés, secrets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Numéro de l'exécution de agent-dev (ex. 12345678901)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      REPO: ${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      # Le script vient de dev (version relue par un humain), pas de la branche de l'agent
+      - name: Copier le script de publication
+        run: cp .github/scripts/publish-agent-work.sh "$RUNNER_TEMP/publish.sh"
+
+      - name: Récupérer le travail sauvegardé
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-work
+          path: ${{ runner.temp }}/agent-work
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Restaurer la branche de l'agent
+        run: |
+          W="$RUNNER_TEMP/agent-work"
+          ISSUE=$(jq -r '.issue' "$W/meta.json")
+          BRANCH=$(jq -r '.branch' "$W/meta.json")
+          case "$BRANCH" in
+            ai/*) ;;
+            *) echo "::error::Branche inattendue dans la sauvegarde : $BRANCH"; exit 1 ;;
+          esac
+          git fetch "$W/work.bundle" "$BRANCH:$BRANCH"
+          git switch "$BRANCH"
+          echo "ISSUE_NUMBER=$ISSUE" >> "$GITHUB_ENV"
+          echo "Branche $BRANCH restaurée pour l'issue #$ISSUE"
+
+      - name: Jeton de l'application des agents
+        id: app-token
+        if: vars.AGENT_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - name: Contrôler et publier
+        id: pr
+        env:
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          USING_APP: ${{ steps.app-token.outputs.token != '' }}
+          RESULT_FILE: ${{ runner.temp }}/agent-work/result.json
+        run: bash "$RUNNER_TEMP/publish.sh"
+
+      - name: Compte rendu dans l'issue
+        if: always() && env.ISSUE_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -n "$PR_URL" ]; then
+            MSG="✅ Travail publié sans relancer l'agent : $PR_URL"
+          else
+            MSG="⛔ La republication a échoué ([détails]($RUN_URL))."
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "$MSG"

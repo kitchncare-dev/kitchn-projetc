@@ -2,15 +2,18 @@ name: agent-dev
 
 # Lance l'orchestrateur quand le label « ai-dev » est posé sur une issue.
 # L'orchestrateur planifie, fait coder le developer, fait relire le reviewer et commite en local.
-# C'est CE workflow (pas l'agent) qui vérifie le résultat, pousse la branche et ouvre la PR vers dev.
+# C'est CE workflow (pas l'agent) qui contrôle le résultat, pousse la branche et ouvre la PR vers dev.
+#
+# Économie : les droits de publication sont vérifiés AVANT de lancer l'agent, et le travail de
+# l'agent est toujours sauvegardé (artefact « agent-work », 7 jours). Si la publication échoue,
+# le workflow « agent-publish » la refait sans relancer l'agent (aucun token Claude consommé).
 #
 # Sécurité :
 # - pas d'« environment: » => impossible d'endosser les comptes de déploiement Google Cloud
 #   (la règle Terraform exige « environment:dev » ou « environment:prod » dans le jeton) ;
-# - « id-token: write » sert uniquement à obtenir le jeton de l'application GitHub Claude
-#   (nécessaire pour que la PR ouverte déclenche la CI) ;
-# - seules les personnes ayant les droits d'écriture peuvent poser un label, et l'action
-#   refuse les utilisateurs sans droits d'écriture.
+# - « id-token: write » sert uniquement à l'action Claude pour s'authentifier auprès de GitHub ;
+# - le script de publication est copié AVANT que l'agent ne touche au dépôt ;
+# - seules les personnes ayant les droits d'écriture peuvent poser un label.
 #
 # Pour relancer après une question de l'agent : réponds dans l'issue, retire le label puis remets-le.
 
@@ -36,6 +39,8 @@ jobs:
 
     env:
       ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
       - name: Heure de début
@@ -45,6 +50,41 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+
+      # Copie du script de publication AVANT que l'agent ne puisse modifier le dépôt
+      - name: Copier le script de publication
+        run: cp .github/scripts/publish-agent-work.sh "$RUNNER_TEMP/publish.sh"
+
+      # ---------------------------------------------
+      # Vérification des droits AVANT de consommer des tokens
+      # ---------------------------------------------
+      - name: Jeton de l'application des agents (vérification)
+        id: preflight-token
+        if: vars.AGENT_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGENT_APP_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+
+      - name: Vérifier les droits de publication
+        id: preflight
+        env:
+          APP_TOKEN: ${{ steps.preflight-token.outputs.token }}
+          HAS_APP: ${{ vars.AGENT_APP_ID != '' }}
+        run: |
+          if [ "$HAS_APP" = "true" ]; then
+            # --dry-run : vérifie le droit d'écriture sans rien pousser
+            if git -c "http.https://github.com/.extraheader=" push --dry-run \
+                 "https://x-access-token:${APP_TOKEN}@github.com/${REPO}.git" \
+                 "HEAD:refs/heads/ai/${ISSUE_NUMBER}-verification-droits"; then
+              echo "✅ L'application des agents peut pousser sur le dépôt."
+            else
+              echo "::error::L'application des agents ne peut pas pousser : vérifie qu'elle est installée sur le dépôt avec « Contents : Read and write »."
+              exit 1
+            fi
+          else
+            echo "::warning::Variable AGENT_APP_ID absente : la PR sera ouverte avec le jeton par défaut, la CI ne se lancera pas toute seule."
+          fi
 
       - uses: actions/setup-python@v5
         with:
@@ -65,8 +105,7 @@ jobs:
           pip install -r apps/api/requirements.txt
           npm --prefix apps/web ci
 
-      # Le workflow lit l'issue lui-même et la donne à l'agent dans un fichier :
-      # l'agent n'a pas besoin de « gh ». Le dossier est exclu de git (jamais commité).
+      # Le workflow lit l'issue lui-même et la donne à l'agent dans un fichier.
       - name: Préparer le contexte de l'agent
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,7 +113,7 @@ jobs:
           mkdir -p .agent-context
           echo ".agent-context/" >> .git/info/exclude
           # --json : sans terminal, « gh issue view --comments » n'affiche que les commentaires (ni titre ni corps)
-          gh issue view "$ISSUE_NUMBER" --repo "${{ github.repository }}" --json number,title,body,comments \
+          gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json number,title,body,comments \
             --jq '"# Issue #\(.number) : \(.title)\n\n\(.body)\n\n## Commentaires\n\n" + ([.comments[] | "### \(.author.login) (\(.createdAt))\n\n\(.body)\n"] | join("\n"))' > .agent-context/issue.md
           echo "Issue enregistrée : $(wc -l < .agent-context/issue.md) lignes"
 
@@ -82,7 +121,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body "🤖 L'orchestrateur démarre ([suivre l'exécution](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))."
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "🤖 L'orchestrateur démarre ([suivre l'exécution]($RUN_URL))."
 
       # ---------------------------------------------
       # L'agent : orchestrateur + sous-agents developer et reviewer
@@ -112,16 +151,20 @@ jobs:
             - crée la branche `ai/${{ github.event.issue.number }}-<description-courte>` depuis `origin/dev` ;
             - fais commiter le travail sur cette branche, mais NE POUSSE PAS et N'OUVRE PAS la PR :
               le workflow s'en charge après des contrôles automatiques ;
+            - avant de rendre ton résultat, vérifie que `git status --short` est vide et que
+              `git ls-files -ci --exclude-standard` n'affiche rien (aucun fichier généré commité) ;
+              sinon, fais corriger le developer (`.gitignore`, `git rm --cached`, `git commit --amend`) ;
             - rends ton résultat dans la sortie structurée :
-              * status = "ready" si le code est commité et approuvé par le reviewer,
-                "questions" si tu as besoin d'une réponse humaine,
+              * status = "ready" si le code est commité et approuvé par le reviewer (des remarques
+                non bloquantes n'empêchent pas « ready ») ;
+                "questions" si tu as besoin d'une réponse humaine ;
                 "blocked" si tu n'as pas pu terminer ;
               * pr_title et pr_body (corps de PR complet au format de tes instructions) si status = "ready" ;
               * report : ton rapport final en français (questions, blocages, ce qui a été fait).
           claude_args: |
             --agent orchestrator
             --settings .claude/settings.json
-            --allowedTools "Bash(git status*),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch*),Bash(git fetch *),Bash(git ls-files*),Bash(git grep *),Bash(pip install -r apps/api/requirements.txt),Bash(python -m pytest*),Bash(npm --prefix apps/web ci),Bash(npm --prefix apps/web run lint),Bash(npm --prefix apps/web run build),Read,Grep,Glob,Bash(git switch *),Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Edit,Write,Agent"
+            --allowedTools "Bash(git status*),Bash(git diff *),Bash(git log *),Bash(git show *),Bash(git branch*),Bash(git fetch *),Bash(git ls-files*),Bash(git grep *),Bash(git switch *),Bash(git checkout -b *),Bash(git add *),Bash(git commit *),Bash(git rm --cached *),Bash(git rm -r --cached *),Bash(git restore *),Bash(git mv *),Bash(python -m pytest*),Bash(npm --prefix apps/web ci),Bash(npm --prefix apps/web run lint),Bash(npm --prefix apps/web run build),Read,Grep,Glob,Edit,Write,Agent"
             --model claude-sonnet-5-5
             --permission-mode acceptEdits
             --max-turns 40
@@ -130,12 +173,12 @@ jobs:
 
       # Affiche les actions refusées et le dernier message de Claude, pour comprendre un échec
       - name: Diagnostic de l'agent
-        if: always()
+        if: always() && steps.claude.outcome != 'skipped'
         run: |
           FILE="$RUNNER_TEMP/claude-execution-output.json"
           [ -f "$FILE" ] || { echo "Pas de journal d'exécution."; exit 0; }
           jq -r '
-            [.[] | select(.type == "result")] | last |
+            (if type == "array" then . else [.] end) | [.[] | select(.type == "result")] | last |
             "Tours : \(.num_turns)   Coût estimé : \(.total_cost_usd) $   Erreur : \(.is_error)",
             "Actions refusées :",
             ((.permission_denials // [])[] | "  - \(.tool_name) : \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))"),
@@ -144,88 +187,59 @@ jobs:
           ' "$FILE" || true
 
       # ---------------------------------------------
-      # Contrôles déterministes (indépendants de l'IA)
+      # Sauvegarde du travail de l'agent (toujours, s'il y a des commits)
       # ---------------------------------------------
-      - name: Vérifier la branche et les fichiers modifiés
-        id: check
-        if: fromJSON(steps.claude.outputs.structured_output || '{}').status == 'ready'
+      - name: Sauvegarder le travail de l'agent
+        id: save
+        if: always() && steps.claude.outcome != 'skipped'
+        env:
+          RESULT: ${{ steps.claude.outputs.structured_output }}
         run: |
+          mkdir -p "$RUNNER_TEMP/agent-work"
           BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "Branche : $BRANCH"
-
+          [ -z "$RESULT" ] && RESULT='{}'
+          echo "$RESULT" > "$RUNNER_TEMP/agent-work/result.json"
           case "$BRANCH" in
-            ai/${ISSUE_NUMBER}-*) ;;
-            *) echo "::error::La branche doit s'appeler ai/${ISSUE_NUMBER}-<description>, reçu : $BRANCH"; exit 1 ;;
+            ai/*) ;;
+            *) echo "Aucune branche ai/* : rien à sauvegarder."; exit 0 ;;
           esac
-
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "::error::Des fichiers ne sont pas commités."; git status --short; exit 1
+          if [ "$(git rev-list --count origin/dev..HEAD)" = "0" ]; then
+            echo "Aucun commit : rien à sauvegarder."; exit 0
           fi
+          git bundle create "$RUNNER_TEMP/agent-work/work.bundle" "$BRANCH" ^origin/dev
+          jq -n --arg issue "$ISSUE_NUMBER" --arg branch "$BRANCH" '{issue: $issue, branch: $branch}' \
+            > "$RUNNER_TEMP/agent-work/meta.json"
+          echo "saved=true" >> "$GITHUB_OUTPUT"
+          echo "Travail sauvegardé : $BRANCH ($(git rev-list --count origin/dev..HEAD) commit(s))"
 
-          git fetch origin dev
-          CHANGED=$(git diff --name-only origin/dev...HEAD)
-          if [ -z "$CHANGED" ]; then
-            echo "::error::Aucun changement par rapport à dev."; exit 1
-          fi
-          echo "Fichiers modifiés :"; echo "$CHANGED"
-
-          # Fichiers réservés aux humains : on refuse de pousser
-          FORBIDDEN=$(echo "$CHANGED" | grep -E '^(infra/|\.github/|\.claude/|docs/produit/)|(^|/)CLAUDE\.md$|(^|/)CODEOWNERS$|(^|/)\.env|\.tfstate|\.tfvars' || true)
-          if [ -n "$FORBIDDEN" ]; then
-            echo "::error::Fichiers protégés modifiés :"; echo "$FORBIDDEN"; exit 1
-          fi
-
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-
-      - name: Rechercher des secrets dans les commits de l'agent
-        if: steps.check.outcome == 'success'
-        run: |
-          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" -w /repo \
-            ghcr.io/gitleaks/gitleaks:latest \
-            git --redact --no-banner --log-opts="origin/dev..HEAD" /repo
+      - name: Joindre le travail à l'exécution
+        if: steps.save.outputs.saved == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-work
+          path: ${{ runner.temp }}/agent-work
+          retention-days: 7
 
       # ---------------------------------------------
-      # Pousser et ouvrir la PR (avec le jeton de l'application Claude,
-      # pour que la PR déclenche la CI ; le jeton par défaut ne le ferait pas)
+      # Contrôles (sans IA), push et PR
       # ---------------------------------------------
-      # Jeton de NOTRE application GitHub (variable AGENT_APP_ID + secret AGENT_APP_PRIVATE_KEY).
-      # Le jeton de l'application Claude ne sert pas ici : l'action le révoque à la fin de son étape.
-      # Un jeton d'application déclenche la CI sur la PR ; le jeton par défaut (secours) ne le fait pas.
+      # Jeton neuf de l'application (un jeton dure 1 heure : celui de la vérification peut avoir expiré)
       - name: Jeton de l'application des agents
         id: app-token
-        if: steps.check.outcome == 'success' && vars.AGENT_APP_ID != ''
+        if: steps.save.outputs.saved == 'true' && fromJSON(steps.claude.outputs.structured_output || '{}').status == 'ready' && vars.AGENT_APP_ID != ''
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.AGENT_APP_ID }}
           private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
 
-      - name: Pousser la branche et ouvrir la PR
+      - name: Contrôler et publier
         id: pr
-        if: steps.check.outcome == 'success'
+        if: steps.save.outputs.saved == 'true' && fromJSON(steps.claude.outputs.structured_output || '{}').status == 'ready'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           USING_APP: ${{ steps.app-token.outputs.token != '' }}
-          BRANCH: ${{ steps.check.outputs.branch }}
-          RESULT: ${{ steps.claude.outputs.structured_output }}
-        run: |
-          # On ignore l'en-tête d'authentification laissé par actions/checkout (jeton par défaut)
-          git -c "http.https://github.com/.extraheader=" push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/${BRANCH}"
-
-          TITLE=$(echo "$RESULT" | jq -r '.pr_title // empty')
-          [ -z "$TITLE" ] && TITLE="Issue #${ISSUE_NUMBER}"
-          BODY=$(echo "$RESULT" | jq -r '.pr_body // empty')
-          if ! echo "$BODY" | grep -q "Closes #${ISSUE_NUMBER}"; then
-            BODY=$(printf 'Closes #%s\n\n%s' "$ISSUE_NUMBER" "$BODY")
-          fi
-          NOTE="_PR ouverte automatiquement par le workflow agent-dev._"
-          if [ "$USING_APP" != "true" ]; then
-            NOTE="$NOTE"$'\n\n'"⚠️ Ouverte avec le jeton par défaut : la CI et la relecture IA ne se lancent pas toutes seules. Pour les lancer, ferme puis rouvre cette PR."
-          fi
-          printf '%s\n\n---\n%s\n' "$BODY" "$NOTE" > "$RUNNER_TEMP/pr-body.md"
-
-          URL=$(gh pr create --repo "${{ github.repository }}" --base dev --head "$BRANCH" \
-            --title "$TITLE" --body-file "$RUNNER_TEMP/pr-body.md")
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          RESULT_FILE: ${{ runner.temp }}/agent-work/result.json
+        run: bash "$RUNNER_TEMP/publish.sh"
 
       # ---------------------------------------------
       # Compte rendu dans l'issue (toujours)
@@ -236,12 +250,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ steps.claude.outputs.structured_output }}
           PR_URL: ${{ steps.pr.outputs.url }}
-          CHECK: ${{ steps.check.outcome }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PUBLISH: ${{ steps.pr.outcome }}
+          PREFLIGHT: ${{ steps.preflight.outcome }}
+          SAVED: ${{ steps.save.outputs.saved }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           [ -z "$RESULT" ] && RESULT='{}'
           STATUS=$(echo "$RESULT" | jq -r '.status // "inconnu"')
           REPORT=$(echo "$RESULT" | jq -r '.report // "Aucun rapport (agent interrompu : limite de tours, de budget, de temps, ou erreur)."')
+          REPUBLISH="Le travail est sauvegardé : pour le publier **sans relancer l'agent**, va dans **Actions → agent-publish → Run workflow** et indique \`$RUN_ID\`."
 
           # Consommation : tokens par modèle (sous-agents compris), durée de l'agent et du job
           FILE="$RUNNER_TEMP/claude-execution-output.json"
@@ -264,7 +281,7 @@ jobs:
                 "- **Coût estimé** : \(($r.total_cost_usd // 0) * 100 | round / 100) $ (estimation ; avec un abonnement, c'"'"'est ton quota qui est consommé)"
               ' "$FILE" 2>/dev/null || echo "Consommation indisponible."
             else
-              echo "Consommation indisponible (l'agent n'a pas produit de journal)."
+              echo "Aucun token consommé (l'agent n'a pas été lancé ou n'a pas produit de journal)."
             fi
             echo "- **Durée totale du job** : $((ELAPSED / 60)) min $((ELAPSED % 60)) s"
             echo
@@ -272,14 +289,22 @@ jobs:
           } > "$RUNNER_TEMP/usage.md"
 
           {
-            if [ -n "$PR_URL" ]; then
-              echo "✅ PR ouverte : $PR_URL"
+            if [ "$PREFLIGHT" = "failure" ]; then
+              echo "⛔ L'application GitHub des agents ne peut pas pousser sur le dépôt. **L'agent n'a pas été lancé, aucun token consommé.** Vérifie qu'elle est installée sur le dépôt avec « Contents : Read and write », puis relance le label."
+            elif [ -n "$PR_URL" ]; then
+              echo "✅ PR : $PR_URL"
+            elif [ "$PUBLISH" = "failure" ]; then
+              echo "⛔ Le travail est terminé mais sa publication a échoué (contrôles automatiques, secrets ou droits : voir l'étape « Contrôler et publier »)."
+              echo
+              echo "$REPUBLISH"
             elif [ "$STATUS" = "questions" ]; then
               echo "❓ L'orchestrateur a besoin de réponses. Réponds dans cette issue, puis retire et remets le label \`ai-dev\`."
-            elif [ "$STATUS" = "ready" ] && [ "$CHECK" != "success" ]; then
-              echo "⛔ Le travail a été refusé par les contrôles automatiques (branche, fichiers protégés ou secrets). Voir l'exécution."
             else
               echo "⚠️ Tâche non terminée (statut : $STATUS)."
+              if [ "$SAVED" = "true" ]; then
+                echo
+                echo "Des commits ont été faits. Si, après lecture du rapport, tu juges le travail correct : $REPUBLISH"
+              fi
             fi
             echo
             echo "<details><summary>Rapport de l'orchestrateur</summary>"
@@ -293,4 +318,4 @@ jobs:
             echo "[Détails de l'exécution]($RUN_URL)"
           } > "$RUNNER_TEMP/comment.md"
 
-          gh issue comment "$ISSUE_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md"

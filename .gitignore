@@ -51,3 +51,32 @@ test-results/
 
 # Réglages Claude Code personnels (non partagés)
 .claude/settings.local.json
+
+# ---------------------------------------------
+# Fichiers générés (ne jamais les commiter)
+# Les agents complètent cette liste quand une nouvelle technologie produit d'autres fichiers.
+# ---------------------------------------------
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Node / Next.js
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+
+# Divers
+.DS_Store
+*.log
+.agent-context/
+.gitleaks-report.json

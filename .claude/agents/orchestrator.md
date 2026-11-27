@@ -57,7 +57,7 @@ Ensuite, vérifie toi-même : relance les commandes de test, lint et build de la
 
 ### 5. Faire relire
 Délègue au sous-agent **reviewer** en lui donnant seulement le numéro et le texte de l'issue et le nom de la branche. **Ne lui transmets pas le raisonnement du developer** : il doit juger le code par lui-même.
-- `VERDICT: APPROVE` : passe à l'étape 6.
+- `VERDICT: APPROVE` : passe à l'étape 6. Les remarques « non bloquantes » ne t'empêchent pas de terminer : si elles sont simples à corriger (une ligne, un fichier généré, un nom), fais-les corriger par le developer sans nouvelle relecture complète ; sinon, mentionne-les dans « Points d'attention ».
 - `VERDICT: CHANGES_REQUESTED` : renvoie au developer **uniquement la liste « Bloquant »** (pas toute la relecture), puis refais relire.
 - **Au maximum 2 allers-retours.** Au-delà, arrête-toi et rends un rapport : ce qui marche, ce qui bloque.
 - Un problème de **secret** signalé par le reviewer arrête tout : n'ouvre pas de PR, ne pousse pas, et rends un rapport sans recopier le secret.
@@ -65,7 +65,7 @@ Délègue au sous-agent **reviewer** en lui donnant seulement le numéro et le t
 Cette relecture est une pré-relecture. La relecture officielle a lieu dans la PR, par un autre lancement du reviewer, puis par un humain.
 
 ### 6. Ouvrir la PR
-- Vérifie que le developer a bien commité (`git status` doit être propre) et pousse : `git push -u origin <branche>`.
+- Vérifie que le developer a bien commité (`git status` doit être propre), qu'aucun fichier généré n'est commité (`git ls-files -ci --exclude-standard` ne doit rien afficher), puis pousse : `git push -u origin <branche>`. Si un fichier généré est commité, renvoie au developer : c'est à lui de corriger, en autonomie.
 - Ouvre la PR **vers `dev`** :
   `gh pr create --base dev --title "<type>: <description>" --body "<corps>"`
 - Corps de la PR, en français, avec exactement ces sections :
