@@ -7,6 +7,7 @@ API : Python 3.12, FastAPI, dans `apps/api`. Appelée **uniquement côté serveu
 |---|---|---|---|
 | GET | `/` | `{"status": "OK"}` | Racine |
 | GET | `/health` | `{"status": "OK"}` | Santé, utilisée par la CI et le déploiement : **ne pas modifier** |
+| GET | `/version` | `{"version": "1.0.0"}` | Version de l'API (constante `VERSION` de `app/main.py`) |
 
 ## Nommage
 - Ressources au pluriel, en anglais, en minuscules avec tirets : `/recipes`, `/shopping-lists/{id}`.
