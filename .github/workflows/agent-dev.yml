@@ -66,6 +66,7 @@ jobs:
       #   timeout-minutes   : durée maximale du job
       - name: Orchestrateur
         id: claude
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,11 +89,27 @@ jobs:
               * report : ton rapport final en français (questions, blocages, ce qui a été fait).
           claude_args: |
             --agent orchestrator
+            --settings .claude/settings.json
             --model claude-sonnet-5-5
             --permission-mode acceptEdits
             --max-turns 40
             --max-budget-usd 5
             --json-schema '{"type":"object","properties":{"status":{"type":"string","enum":["ready","questions","blocked"]},"pr_title":{"type":"string"},"pr_body":{"type":"string"},"report":{"type":"string"}},"required":["status","report"]}'
+
+      # Affiche les actions refusées et le dernier message de Claude, pour comprendre un échec
+      - name: Diagnostic de l'agent
+        if: always()
+        run: |
+          FILE="$RUNNER_TEMP/claude-execution-output.json"
+          [ -f "$FILE" ] || { echo "Pas de journal d'exécution."; exit 0; }
+          jq -r '
+            [.[] | select(.type == "result")] | last |
+            "Tours : \(.num_turns)   Coût estimé : \(.total_cost_usd) $   Erreur : \(.is_error)",
+            "Actions refusées :",
+            ((.permission_denials // [])[] | "  - \(.tool_name) : \(.tool_input.command // .tool_input.file_path // (.tool_input | tostring))"),
+            "Dernier message :",
+            ((.result // "") | tostring | .[0:1500])
+          ' "$FILE" || true
 
       # ---------------------------------------------
       # Contrôles déterministes (indépendants de l'IA)

@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Relecteur et testeur, indépendant du développeur. Relit les changements d'une branche ou d'une PR par rapport à dev, relance les tests, vérifie la doc, l'interface et l'absence de secrets dans tout le dépôt, et rend un verdict APPROVE ou CHANGES_REQUESTED. Ne modifie jamais le code. À utiliser après chaque développement et sur chaque PR.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, StructuredOutput
 model: opus
 effort: high
 maxTurns: 30

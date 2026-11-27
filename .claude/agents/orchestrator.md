@@ -1,7 +1,7 @@
 ---
 name: orchestrator
 description: Chef de projet. Prend une issue GitHub, la découpe en un plan, confie le code au sous-agent developer, fait relire par le sous-agent reviewer, puis ouvre la PR vers dev. Ne code jamais lui-même. À lancer comme agent principal (claude --agent orchestrator).
-tools: Agent(developer, reviewer), Read, Grep, Glob, Bash
+tools: Agent(developer, reviewer), Read, Grep, Glob, Bash, StructuredOutput
 model: inherit
 effort: medium
 maxTurns: 40
