@@ -1,0 +1,52 @@
+name: telegram-notify
+description: >-
+  Envoie un message Telegram au propriétaire (secrets TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID).
+  Ne fait rien si ces secrets ne sont pas configurés, et n'échoue jamais : une notification
+  ratée ne doit pas faire échouer le workflow.
+
+inputs:
+  bot-token:
+    description: Jeton du bot (secrets.TELEGRAM_BOT_TOKEN)
+    required: false
+    default: ""
+  chat-id:
+    description: Identifiant Telegram du destinataire (secrets.TELEGRAM_CHAT_ID)
+    required: false
+    default: ""
+  text:
+    description: Texte du message (texte brut, 4000 caractères maximum)
+    required: true
+  buttons:
+    description: >-
+      Boutons au format JSON (clavier Telegram), par exemple
+      [[{"text":"Voir la PR","url":"https://..."}]] ou [[{"text":"🔁 Relancer","callback_data":"launch:42"}]]
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Envoyer la notification Telegram
+      shell: bash
+      env:
+        TG_TOKEN: ${{ inputs.bot-token }}
+        TG_CHAT: ${{ inputs.chat-id }}
+        TG_TEXT: ${{ inputs.text }}
+        TG_BUTTONS: ${{ inputs.buttons }}
+      run: |
+        if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+          echo "Notifications Telegram non configurées : rien à envoyer."
+          exit 0
+        fi
+        BUTTONS="${TG_BUTTONS:-[]}"
+        PAYLOAD=$(jq -n --arg chat "$TG_CHAT" --arg text "${TG_TEXT:0:4000}" --argjson buttons "$BUTTONS" \
+          '{chat_id: $chat, text: $text, disable_web_page_preview: true}
+           + (if ($buttons | length) > 0 then {reply_markup: {inline_keyboard: $buttons}} else {} end)') \
+          || { echo "::warning::Boutons Telegram invalides, message ignoré."; exit 0; }
+        # -q ignore ~/.curlrc ; le jeton n'apparaît pas dans le journal (secret masqué par GitHub)
+        if curl -q -fsS -o /dev/null -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+             -H 'Content-Type: application/json' -d "$PAYLOAD"; then
+          echo "Notification Telegram envoyée."
+        else
+          echo "::warning::Échec de l'envoi de la notification Telegram."
+        fi

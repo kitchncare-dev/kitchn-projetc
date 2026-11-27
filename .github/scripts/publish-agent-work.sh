@@ -38,7 +38,7 @@ echo "Fichiers modifiés :"; echo "$CHANGED"
 
 # Fichiers réservés aux humains, secrets et fichiers générés : on refuse de pousser
 FORBIDDEN=$(echo "$CHANGED" | grep -E \
-  '^(infra/|\.github/|\.claude/|docs/produit/)|(^|/)CLAUDE\.md$|(^|/)CODEOWNERS$|(^|/)\.env|\.tfstate|\.tfvars|__pycache__/|\.pyc$|(^|/)\.pytest_cache/|(^|/)node_modules/|(^|/)\.next/|(^|/)\.agent-context/' \
+  '^(infra/|ops/|\.github/|\.claude/|docs/produit/)|(^|/)CLAUDE\.md$|(^|/)CODEOWNERS$|(^|/)\.env|\.tfstate|\.tfvars|__pycache__/|\.pyc$|(^|/)\.pytest_cache/|(^|/)node_modules/|(^|/)\.next/|(^|/)\.agent-context/' \
   || true)
 if [ -n "$FORBIDDEN" ]; then
   echo "::error::Fichiers interdits dans les commits de l'agent :"; echo "$FORBIDDEN"; exit 1

@@ -37,6 +37,15 @@ module "github_deploy" {
   artifact_repo_id = module.app.artifact_repo_id
 }
 
+# Pont Telegram -> GitHub (dev uniquement), voir ops/telegram-bridge/README.md
+module "telegram_bridge" {
+  source          = "../../modules/telegram-bridge"
+  project_id      = "kitchn-dev-515310"
+  region          = "europe-west9"
+  github_repo     = "kitchncare-dev/kitchn-projetc"
+  deploy_sa_email = module.github_deploy.deploy_service_account
+}
+
 output "wif_provider" {
   value = module.github_deploy.workload_identity_provider
 }
@@ -48,4 +57,7 @@ output "api_url" {
 }
 output "web_url" {
   value = module.app.web_url
+}
+output "telegram_bridge_url" {
+  value = module.telegram_bridge.bridge_url
 }

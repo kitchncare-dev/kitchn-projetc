@@ -123,6 +123,14 @@ jobs:
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "🤖 L'orchestrateur démarre ([suivre l'exécution]($RUN_URL))."
 
+      # Action prise sur dev (relue par un humain), jamais dans le dossier de travail de l'agent
+      - name: Notification Telegram (démarrage)
+        uses: kitchncare-dev/kitchn-projetc/.github/actions/telegram-notify@dev
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          text: "🤖 #${{ github.event.issue.number }} : l'orchestrateur démarre — ${{ github.event.issue.title }}"
+
       # ---------------------------------------------
       # L'agent : orchestrateur + sous-agents developer et reviewer
       # ---------------------------------------------
@@ -245,6 +253,7 @@ jobs:
       # Compte rendu dans l'issue (toujours)
       # ---------------------------------------------
       - name: Compte rendu dans l'issue
+        id: report
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -319,3 +328,48 @@ jobs:
           } > "$RUNNER_TEMP/comment.md"
 
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+
+          # ---- Message Telegram (court) ----
+          # La 1re ligne contient « #<n°> » : répondre à ce message dans Telegram commente l'issue.
+          ISSUE_URL="${{ github.server_url }}/$REPO/issues/$ISSUE_NUMBER"
+          USAGE_LINE=$(jq -r '
+            (if type == "array" then . else [.] end) | [.[] | select(.type == "result")] | last |
+            ([(.modelUsage // {})[] | (.inputTokens // 0) + (.outputTokens // 0) + (.cacheReadInputTokens // 0) + (.cacheCreationInputTokens // 0)] | add // 0) as $t |
+            "\($t) tokens · \(.num_turns // "?") tours · ~\(((.total_cost_usd // 0) * 100 | round) / 100) $"
+          ' "$FILE" 2>/dev/null || echo "consommation inconnue")
+          if [ "$PREFLIGHT" = "failure" ]; then
+            HEAD="⛔ #$ISSUE_NUMBER : l'application GitHub des agents ne peut pas pousser. Agent non lancé."
+            BUTTONS='[]'
+          elif [ -n "$PR_URL" ]; then
+            HEAD="✅ #$ISSUE_NUMBER : PR ouverte"
+            BUTTONS=$(jq -nc --arg u "$PR_URL" '[[{text: "Voir la PR", url: $u}]]')
+          elif [ "$PUBLISH" = "failure" ]; then
+            HEAD="⛔ #$ISSUE_NUMBER : travail terminé mais publication échouée. Republier : Actions → agent-publish → $RUN_ID"
+            BUTTONS=$(jq -nc --arg u "$RUN_URL" '[[{text: "Voir l’exécution", url: $u}]]')
+          elif [ "$STATUS" = "questions" ]; then
+            HEAD="❓ #$ISSUE_NUMBER : l'orchestrateur a des questions. Réponds à ce message, puis clique sur Relancer."
+            BUTTONS=$(jq -nc --arg u "$ISSUE_URL" --arg n "$ISSUE_NUMBER" '[[{text: "🔁 Relancer l’agent", callback_data: ("launch:" + $n)}, {text: "Voir l’issue", url: $u}]]')
+          else
+            HEAD="⚠️ #$ISSUE_NUMBER : tâche non terminée (statut : $STATUS)."
+            BUTTONS=$(jq -nc --arg u "$ISSUE_URL" --arg n "$ISSUE_NUMBER" '[[{text: "🔁 Relancer l’agent", callback_data: ("launch:" + $n)}, {text: "Voir l’issue", url: $u}]]')
+          fi
+          {
+            echo "text<<TG_EOF"
+            echo "$HEAD"
+            echo
+            echo "$REPORT" | head -c 2500
+            echo
+            echo
+            echo "📊 $USAGE_LINE · job $((ELAPSED / 60)) min $((ELAPSED % 60)) s"
+            echo "TG_EOF"
+            echo "buttons=$BUTTONS"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notification Telegram (résultat)
+        if: always() && steps.report.outcome != 'skipped'
+        uses: kitchncare-dev/kitchn-projetc/.github/actions/telegram-notify@dev
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          text: ${{ steps.report.outputs.text }}
+          buttons: ${{ steps.report.outputs.buttons }}

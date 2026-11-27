@@ -80,6 +80,7 @@ jobs:
         run: bash "$RUNNER_TEMP/publish.sh"
 
       - name: Compte rendu dans l'issue
+        id: report
         if: always() && env.ISSUE_NUMBER != ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,7 +89,22 @@ jobs:
         run: |
           if [ -n "$PR_URL" ]; then
             MSG="✅ Travail publié sans relancer l'agent : $PR_URL"
+            TG="✅ #$ISSUE_NUMBER : travail publié sans relancer l'agent"
+            LINK="$PR_URL"
           else
             MSG="⛔ La republication a échoué ([détails]($RUN_URL))."
+            TG="⛔ #$ISSUE_NUMBER : la republication a échoué"
+            LINK="$RUN_URL"
           fi
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "$MSG"
+          echo "text=$TG" >> "$GITHUB_OUTPUT"
+          echo "buttons=$(jq -nc --arg u "$LINK" '[[{text: "Voir", url: $u}]]')" >> "$GITHUB_OUTPUT"
+
+      - name: Notification Telegram
+        if: always() && steps.report.outcome != 'skipped'
+        uses: kitchncare-dev/kitchn-projetc/.github/actions/telegram-notify@dev
+        with:
+          bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          chat-id: ${{ secrets.TELEGRAM_CHAT_ID }}
+          text: ${{ steps.report.outputs.text }}
+          buttons: ${{ steps.report.outputs.buttons }}
